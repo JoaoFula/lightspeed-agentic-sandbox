@@ -65,6 +65,18 @@ class TestBuildStatusAnalysis:
         assert "failureReason" not in status
         assert status["conditions"][1]["reason"] == "Succeeded"
 
+    def test_truncates_top_level_diagnosis_fields(self) -> None:
+        agent = {
+            "options": [],
+            "diagnosis": {
+                "summary": "x" * 10000,
+                "rootCause": "y" * 2000,
+            },
+        }
+        status = build_status("AnalysisResult", agent, started_at=_dt(), completed_at=_dt())
+        assert len(status["diagnosis"]["summary"]) == _MAX_LEN_DIAGNOSIS_SUMMARY
+        assert len(status["diagnosis"]["rootCause"]) == _MAX_LEN_DIAGNOSIS_ROOT_CAUSE
+
     def test_action_required_false(self) -> None:
         agent = {
             "actionRequired": False,
