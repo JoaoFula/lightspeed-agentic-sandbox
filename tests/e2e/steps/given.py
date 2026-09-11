@@ -278,9 +278,10 @@ def sandbox_running_with_mcp(batch_e2e_config: BatchE2EConfig) -> None:
 def prepare_mcp_tool_invocation(bdd_context: dict[str, Any]) -> None:
     bdd_context["output_schema"] = MCP_TOOL_OUTPUT_SCHEMA
     bdd_context["query"] = (
-        "Call the 'list_namespaces' tool from the MCP server named 'mock-ocp-mcp'. "
-        "Return a single JSON object only (no markdown). "
-        "Fields: success=true, summary=<the exact text output from the tool>."
+        "Please check the namespaces using the 'list_namespaces' tool on the "
+        "'mock-ocp-mcp' MCP server before answering. Return a single JSON object "
+        "only (no markdown), with success=true and the tool's exact output in the "
+        "summary field. Do not infer or fabricate the namespace list."
     )
 
 
