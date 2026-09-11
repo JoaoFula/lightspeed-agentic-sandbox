@@ -47,6 +47,7 @@ _MAX_LEN_VERIFICATION_STEP_COMMAND = 4096
 _MAX_LEN_VERIFICATION_STEP_EXPECTED = 1024
 _MAX_LEN_VERIFICATION_STEP_TYPE = 256
 _MAX_LEN_RBAC_JUSTIFICATION = 1024
+_MAX_OPTIONS = 10
 
 # Result kind → agent output keys copied into status (schema-owned shapes).
 _STATUS_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
@@ -177,6 +178,13 @@ def _sanitize_analysis_options(
     """
     errors: list[str] = []
     options[:] = [o for o in options if isinstance(o, dict)]
+    if len(options) > _MAX_OPTIONS:
+        logger.warning(
+            "analysis options truncated from %d to %d (CRD limit)",
+            len(options),
+            _MAX_OPTIONS,
+        )
+        options[:] = options[:_MAX_OPTIONS]
     for idx, opt in enumerate(options):
         # --- truncate top-level option fields ---
         if isinstance(opt.get("title"), str):
