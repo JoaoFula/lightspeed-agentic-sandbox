@@ -165,6 +165,14 @@ def _truncate(value: str, max_len: int) -> str:
     return value[:max_len]
 
 
+def _sanitize_diagnosis(diag: dict[str, Any]) -> None:
+    """Truncate diagnosis string fields to CRD maxLength limits."""
+    if isinstance(diag.get("summary"), str):
+        diag["summary"] = _truncate(diag["summary"], _MAX_LEN_DIAGNOSIS_SUMMARY)
+    if isinstance(diag.get("rootCause"), str):
+        diag["rootCause"] = _truncate(diag["rootCause"], _MAX_LEN_DIAGNOSIS_ROOT_CAUSE)
+
+
 def _sanitize_analysis_options(
     options: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -192,8 +200,7 @@ def _sanitize_analysis_options(
             has_summary = isinstance(diag.get("summary"), str) and diag["summary"]
             has_root = isinstance(diag.get("rootCause"), str) and diag["rootCause"]
             if has_summary and has_root:
-                diag["summary"] = _truncate(diag["summary"], _MAX_LEN_DIAGNOSIS_SUMMARY)
-                diag["rootCause"] = _truncate(diag["rootCause"], _MAX_LEN_DIAGNOSIS_ROOT_CAUSE)
+                _sanitize_diagnosis(diag)
                 diag_valid = True
             else:
                 errors.append(f"option {idx}: incomplete diagnosis")
@@ -322,6 +329,9 @@ def build_status(
             logger.warning("analysis option pairing violations: %s", reason)
             status["failureReason"] = reason
             succeeded = False
+
+    if kind == "AnalysisResult" and isinstance(status.get("diagnosis"), dict):
+        _sanitize_diagnosis(status["diagnosis"])
 
     _strip_empty_values(status)
 
