@@ -230,6 +230,13 @@ class TestSanitizeAnalysisOptions:
         assert len(result) == 1
         assert result[0]["title"] == "t"
 
+    def test_truncates_options_list_to_ten(self) -> None:
+        opts = [{"title": f"opt{i}"} for i in range(11)]
+        result, _errors = _sanitize_analysis_options(opts)
+        assert len(result) == 10
+        assert result[0]["title"] == "opt0"
+        assert result[9]["title"] == "opt9"
+
     def test_plan_without_diagnosis_returns_error(self) -> None:
         opt = {
             "title": "t",
