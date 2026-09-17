@@ -120,7 +120,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 22. **MCP transport.** The sandbox MUST use Streamable HTTP as the MCP transport when connecting to remote MCP servers. SSE transport (deprecated in MCP spec since 2025-03-26) MUST NOT be used for new connections.
 
-22a. **Tool-result inspection** [PLANNED: OLS-3928]. `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` controls DeepAgents tool-result inspection.
+22a. **Tool-result inspection** [PLANNED: OLS-3928]. Configuration MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`. `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` controls the local DeepAgents middleware.
 
 22b. The value MUST default to `true` when the variable is absent or empty.
 

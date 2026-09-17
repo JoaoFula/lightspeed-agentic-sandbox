@@ -80,11 +80,9 @@ The agent returns structured JSON via `run_agent_query()` (formerly HTTP `RunRes
 
 23. **Sandbox failure path.** When input cannot be read, readiness checks fail, Kubernetes create/update fails, or any other infrastructure error occurs, the sandbox MUST write a human-readable message to `/dev/termination-log` (max 4096 bytes) and exit non-zero. The operator reads `pod.status.containerStatuses[].state.terminated.message` — **no Result CR is published** on this path (contrast rules 21–22).
 
-23a. [PLANNED: OLS-3928] A tool-result safety-inspection failure follows the sandbox failure path and stops the complete DeepAgents workflow.
+23a. [PLANNED: OLS-3928] Tool-result safety failure handling MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md` and follow the sandbox failure path.
 
-23b. The sandbox MUST write exactly `ToolResultSafetyInspectionFailed` to `/dev/termination-log` and exit with a nonzero status. The log MUST NOT contain the tool result, error, excerpt, or classifier response.
-
-23c. The sandbox MUST NOT publish a Result CR after this safety failure.
+23b. The sandbox MUST write exactly `ToolResultSafetyInspectionFailed` to `/dev/termination-log`, exit nonzero, and publish no Result CR.
 
 24. **Kubernetes API (not `oc`).** Publishing uses the `kubernetes` Python client (`CustomObjectsApi`): `create_namespaced_custom_object` for create (HTTP 409 AlreadyExists tolerated for idempotent retry), then `replace_namespaced_custom_object_status` for status. In a Kubernetes pod (`KUBERNETES_SERVICE_HOST` set), authentication MUST use in-cluster config only; if that fails, the sandbox MUST fail publish (sandbox failure path, rule 23) and MUST NOT fall back to a local kubeconfig file. Outside a cluster (local dev), `kubeconfig` MAY be used when in-cluster config is unavailable. The sandbox MUST NOT shell out to `oc` for Result CR lifecycle.
 

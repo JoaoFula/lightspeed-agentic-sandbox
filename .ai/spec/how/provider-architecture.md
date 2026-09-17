@@ -20,7 +20,7 @@ Package tree: `AGENTS.md`. Behavioral rules: `what/run-api.md`, `what/provider-c
 - **Options:** `ProviderQueryOptions` is the single bundle passed into every adapter (includes `mcp_servers`, `reasoning_config`).
 - **Model resolution:** `resolve_router_model()` / `resolve_startup_model()` in `config.py`.
 - **Result publishing:** `publish_results/publish.py` + `status.py` — Kubernetes client, no `oc` subprocess.
-- **Result inspector [PLANNED: OLS-3928]:** A focused module owns the strict decision model, token-aware chunking, retries, and `ToolResultSafetyInspectionFailed`.
+- **Result inspector [PLANNED: OLS-3928]:** A focused module implements `openshift/ols/.ai/spec/what/tool-result-inspection.md` and exposes `ToolResultSafetyInspectionFailed` to the batch path.
 
 ## Integration Points
 
@@ -38,9 +38,9 @@ Package tree: `AGENTS.md`. Behavioral rules: `what/run-api.md`, `what/provider-c
 - **OpenAI/Azure adapter (`providers/openai.py`):** branches on `LIGHTSPEED_PROVIDER`. For `azure`, builds `AsyncAzureOpenAI` from `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_VERSION` / deployment; Entra ID mode (per `_resolve_azure()` in `config.py`, `what/configuration.md` rule 9a) reads `client_id`/`tenant_id`/`client_secret` from `/var/run/secrets/llm-credentials/` and passes `azure_ad_token_provider`; API-key mode passes `api_key`. Fail-fast on definitive token-acquisition failure — do not construct or use a broken client.
 - **Bedrock credentials (`config.py::_resolve_bedrock`):** [OLS-4092] the Anthropic-on-Bedrock model path (`ChatBedrockConverse` via `deepagents`) is unchanged; only credential resolution grows. Reads `aws_access_key_id` / `aws_secret_access_key` / optional `role_arn` from `/var/run/secrets/llm-credentials/` (`what/configuration.md` rule 9b). With `role_arn`, `botocore` performs STS assume-role and owns short-lived-credential refresh (delegated-token principle, `what/provider-contract.md` rule 38); without it, static keys are used. `boto3`/`botocore` are already present via `langchain-aws` — no new dependency.
 - **DeepAgents streaming:** `astream(stream_mode="messages")`.
-- **DeepAgents result inspection [PLANNED: OLS-3928]:** Install middleware after artifact offload. Run inspection before result delivery to the model and before `ToolResultEvent` emission. Inspect every preview, normal result, error, file read, and search result that enters model context.
-- **Classifier isolation [PLANNED: OLS-3928]:** Construct a separate invocation from the resolved model without tools, request messages, skills, RAG content, or reasoning output. Bind the strict inspection schema through the existing LangChain structured-output interface.
-- **Inspection failure [PLANNED: OLS-3928]:** Do not emit `ToolResultEvent` with rejected content. Propagate `ToolResultSafetyInspectionFailed` to `batch.py`. The batch path writes only that controlled reason to the termination log and exits non-zero without publishing a Result CR.
+- **DeepAgents result inspection [PLANNED: OLS-3928]:** Install middleware after artifact offload. Run inspection before result delivery to the model and before `ToolResultEvent` emission. Route each model-visible preview, normal result, error, file read, and search result through it.
+- **Classifier integration [PLANNED: OLS-3928]:** Construct the contract-defined isolated invocation from the resolved model and bind its schema through the existing LangChain structured-output interface.
+- **Inspection failure [PLANNED: OLS-3928]:** Do not emit a rejected `ToolResultEvent`. Propagate `ToolResultSafetyInspectionFailed` to `batch.py`, which exits nonzero without publishing a Result CR.
 - **Gemini bash:** Monkey-patches `run_async` for confirmation and `bash -c` wrapping.
 - **MCP Secret headers:** First file (sorted by name) under `/var/secrets/mcp/<secretName>/`.
 - **Containerfile:** Multi-stage hermetic build; `oc`/`kubectl` in image for **agent tools** (not Result CR publishing); user `agent`; `catatonit`; batch CMD.

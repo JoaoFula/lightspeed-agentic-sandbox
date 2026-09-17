@@ -87,21 +87,13 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 
 ### Tool-Result Inspection [PLANNED: OLS-3928]
 
-18a. Each DeepAgents tool-result inspection MUST create a `tool_result.inspection` span.
+18a. Sandbox telemetry MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
 
-18b. Controlled attributes can identify runtime, result type, chunk count, chunk index, attempt count, outcome, category, tool, provider, and model.
+18b. Each DeepAgents inspection MUST create the contract's `tool_result.inspection` span and attach it to the parent agent trace.
 
-18c. The outcome MUST be `benign`, `malicious`, or `classifier_error`.
+18c. The sandbox can add controlled tool, provider, and model identifiers to the contract-defined attributes.
 
-18d. A malicious decision or exhausted classifier failure MUST set the inspection span and parent agent span to error.
-
-18e. Logs MUST record configuration state, malicious decisions, classifier failures, and inspection-based termination.
-
-18f. Successful chunks MUST NOT produce one log per chunk.
-
-18g. Inspection spans and logs MUST NOT contain tool arguments, tool results, rejected excerpts, classifier prompts, or free-form classifier output.
-
-18h. The feature MUST NOT add a Prometheus metric. Existing generic inference instrumentation can observe classifier calls.
+18d. Existing generic inference instrumentation can observe classifier calls. The sandbox MUST add no feature-specific Prometheus metric.
 
 ### Metrics
 
