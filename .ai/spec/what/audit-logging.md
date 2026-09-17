@@ -85,6 +85,24 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 
 18. **Gemini** (`providers/gemini.py`): Emit `gen_ai.choice` with `gen_ai.completion` from text parts (buffered). Emit `gen_ai.reasoning_content` from thought parts when present. Create `execute_tool {name}` spans from function_call/response parts. Set token usage from the stream end.
 
+### Tool-Result Inspection [PLANNED: OLS-3928]
+
+18a. Each DeepAgents tool-result inspection MUST create a `tool_result.inspection` span.
+
+18b. Controlled attributes can identify runtime, result type, chunk count, chunk index, attempt count, outcome, category, tool, provider, and model.
+
+18c. The outcome MUST be `benign`, `malicious`, or `classifier_error`.
+
+18d. A malicious decision or exhausted classifier failure MUST set the inspection span and parent agent span to error.
+
+18e. Logs MUST record configuration state, malicious decisions, classifier failures, and inspection-based termination.
+
+18f. Successful chunks MUST NOT produce one log per chunk.
+
+18g. Inspection spans and logs MUST NOT contain tool arguments, tool results, rejected excerpts, classifier prompts, or free-form classifier output.
+
+18h. The feature MUST NOT add a Prometheus metric. Existing generic inference instrumentation can observe classifier calls.
+
 ### Metrics
 
 19. The sandbox MUST record the following `gen_ai.*` Prometheus histograms during agent execution (`metrics.py`). Histograms are **in-process only** (`prometheus_client`); the batch entrypoint MUST NOT expose a `/metrics` HTTP scrape endpoint and MUST NOT export histograms to OTLP or Pushgateway at shutdown. Short-lived one-shot pods are a poor fit for pull-based Prometheus scraping; **OTLP traces** (with `gen_ai.usage.*` on inference spans) are the operational signal when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Unit tests (`tests/test_metrics.py`) verify histogram recording.
@@ -132,3 +150,4 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 - `ols/.ai/spec/what/audit-logging.md` — parent spec (authoritative for correlation model, event semantics, OTel GenAI attribute reference)
 - [OTel GenAI Semantic Conventions v1.41](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/README.md)
 - [OTel MCP Semantic Conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md)
+- Parent workspace `ols/.ai/spec/what/tool-result-inspection.md` — cross-repository tool-result inspection contract
