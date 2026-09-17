@@ -101,11 +101,11 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 41. **Interception point.** DeepAgents middleware, or an equivalent tool wrapper, MUST inspect each effective model-visible result. Inspection occurs after artifact offload and before delivery to the main model or `ToolResultEvent` emission.
 
-42. **Model integration.** The middleware MUST use the resolved DeepAgents model for the isolated classifier invocation.
+42. **Model integration.** The middleware MUST construct the isolated classifier from the resolved DeepAgents model configuration. It MUST omit the main agent's reasoning configuration.
 
 43. **Local paths.** The interception paths include normal results, tool-generated errors, shell output, MCP output, file reads, and search results. They also include offload previews and references. Each later model-visible artifact read or search result MUST pass through the same middleware.
 
-44. **Event suppression.** A failed inspection MUST raise `ToolResultSafetyInspectionFailed`. The adapter MUST emit no rejected `ToolResultEvent`, passing subset, or other output event that contains the result.
+44. **Event boundary.** After a pass, the adapter MUST send a payload-free `ToolResultEvent` to `EventLogger` and `AuditLogger`. This event can contain safe metadata and controlled inspection fields. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and emit no result event.
 
 45. **Disabled behavior.** When `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` is false, the middleware MUST skip inspection calls and inspection-based termination. The main-system safety instruction remains active for every provider.
 
@@ -134,7 +134,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 - Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output strategy when thinking is configured
 - [PLANNED: OLS-3928] Fast mock tests verify contract conformance, offloaded read paths, disabled inspection, and controlled sandbox failure.
-- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They also verify suppression from DeepAgents context, events, termination details, and Result CRs.
+- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They verify payload-free accepted logger events and rejected-event suppression. They also verify controlled termination without a Result CR.
 - The cross-repository real-model corpus and reporting requirements are owned by `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
 - Live batch: [skills.feature](../../../tests/e2e/features/skills.feature), [structured_output.feature](../../../tests/e2e/features/structured_output.feature), [mcp.feature](../../../tests/e2e/features/mcp.feature), [reasoning_config.feature](../../../tests/e2e/features/reasoning_config.feature)
 - Harness helpers: [test_batch_e2e_helpers.py](../../../tests/test_batch_e2e_helpers.py) (no cluster)
