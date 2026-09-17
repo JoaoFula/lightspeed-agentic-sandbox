@@ -103,11 +103,11 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 42. **Isolated classifier call.** The classifier call MUST contain no tools, conversation history, RAG content, attachments, skills, or main-agent system prompt.
 
-43. **Strict response.** The classifier MUST return only `injectionDetected` and `category`. Additional fields, missing fields, and free-form reasoning are invalid.
+43. **Strict response.** The classifier MUST return only `injectionDetected` and `category`. `injectionDetected` MUST be a Boolean. Additional fields, missing fields, and free-form reasoning are invalid.
 
 44. **Categories.** Allowed categories are `none`, `instruction_override`, `role_change`, `prompt_extraction`, `data_exfiltration`, `tool_manipulation`, and `unknown`.
 
-45. **Response consistency.** A benign response MUST use `none`. A malicious response MUST use a category other than `none`.
+45. **Response consistency.** `false` is valid only with `none`. `true` is valid only with a non-`none` category, including `unknown`. `true` with `unknown` is a valid malicious decision, not an unclassifiable result. An invalid field type or inconsistent field combination is an invalid response.
 
 46. **Retry policy.** A timeout, provider error, refusal, or invalid response permits three total attempts. Delays before attempts two and three are 0.5 seconds and 1 second. Failure of the third attempt is unclassifiable and fails closed.
 
@@ -116,6 +116,10 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 48. **Chunking.** A long result MUST use sequential token-aware chunks with a 256-token overlap. There is no explicit chunk-count limit. The adapter MUST NOT truncate model-visible content only to reduce inspection work. Inspection remains subject to the agent deadline.
 
 49. **All-chunk rule.** Every chunk and every result in one concurrent tool round MUST pass before DeepAgents starts the next model call.
+
+49a. **Normalized event boundary.** The adapter MUST inspect a result before it emits `ToolResultEvent`. The shared event loop can send this event to `EventLogger` and `AuditLogger`.
+
+49b. **Failed event suppression.** If inspection fails, the adapter MUST NOT emit `ToolResultEvent` or another event that contains the rejected result.
 
 50. **Failure.** One malicious or unclassifiable chunk MUST stop the complete agent workflow with `ToolResultSafetyInspectionFailed`.
 
@@ -170,7 +174,7 @@ Lightspeed stopped the operation because a tool result failed the safety inspect
 
 - Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output strategy when thinking is configured
 - [PLANNED: OLS-3928] Fast tests use mock classifier responses. They cover chunk overlap, strict decisions, retry delays, concurrent-round atomicity, offloaded reads, disabled inspection, and controlled failure content.
-- [PLANNED: OLS-3928] Integration tests verify that rejected content does not enter DeepAgents context, events, logs, spans, termination details, or Result CRs.
+- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They verify that rejected content does not enter DeepAgents context, events, logs, spans, termination details, or Result CRs.
 - [PLANNED: OLS-3928] A separate real-model evaluation uses labeled attacks, benign OpenShift output, quoted attacks, and multilingual content. It reports false positives and false negatives by provider and model.
 - Live batch: [skills.feature](../../../tests/e2e/features/skills.feature), [structured_output.feature](../../../tests/e2e/features/structured_output.feature), [mcp.feature](../../../tests/e2e/features/mcp.feature), [reasoning_config.feature](../../../tests/e2e/features/reasoning_config.feature)
 - Harness helpers: [test_batch_e2e_helpers.py](../../../tests/test_batch_e2e_helpers.py) (no cluster)
