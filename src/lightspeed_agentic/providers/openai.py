@@ -50,18 +50,34 @@ from lightspeed_agentic.types import (
 logger = logging.getLogger(__name__)
 
 
-_OPENAI_HOSTS = ("api.openai.com",)
+def _make_strict(schema: dict[str, Any]) -> dict[str, Any]:
+    """Add OpenAI strict-schema requirements recursively without mutating input."""
+    if not isinstance(schema, dict):
+        return schema
+    schema = dict(schema)
+    if schema.get("type") == "object" and "properties" in schema:
+        schema["additionalProperties"] = False
+        schema["required"] = list(schema["properties"].keys())
+        schema["properties"] = {k: _make_strict(v) for k, v in schema["properties"].items()}
+    if "items" in schema and isinstance(schema["items"], dict):
+        schema["items"] = _make_strict(schema["items"])
+    if "oneOf" in schema and isinstance(schema["oneOf"], list):
+        logger.info("Converting oneOf to anyOf for OpenAI compatibility")
+        schema.setdefault("anyOf", []).extend(schema.pop("oneOf"))
+    for keyword in ("anyOf", "allOf"):
+        if keyword in schema and isinstance(schema[keyword], list):
+            schema[keyword] = [_make_strict(item) for item in schema[keyword]]
+    if "not" in schema and isinstance(schema["not"], dict):
+        schema["not"] = _make_strict(schema["not"])
+    for defs_key in ("$defs", "definitions"):
+        if defs_key in schema and isinstance(schema[defs_key], dict):
+            schema[defs_key] = {
+                name: _make_strict(value) for name, value in schema[defs_key].items()
+            }
+    return schema
 
-# Models that support json_schema response format (structured output with strict mode)
-_MODELS_WITH_JSON_SCHEMA = {
-    "gpt-4",
-    "gpt-4-turbo",
-    "gpt-4-turbo-preview",
-    "gpt-4-turbo-2024-04-09",
-    "gpt-4o",
-    "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20",
-}
+
+_OPENAI_HOSTS = ("api.openai.com",)
 
 
 def _is_native_openai() -> bool:
@@ -77,24 +93,6 @@ def _is_native_openai() -> bool:
         return False
 
 
-def _model_supports_json_schema(model: str) -> bool:
-    """Check if a model supports json_schema response format (structured output).
-
-    Args:
-        model: Model identifier (e.g., 'gpt-4o', 'gpt-4-turbo')
-
-    Returns:
-        True if model supports json_schema, False otherwise.
-        For custom endpoints (non-OpenAI), returns True (assume compatibility).
-    """
-    if not _is_native_openai():
-        # Custom endpoints (vLLM, etc.) - assume they support json_schema
-        # if user is requesting it. Failures will be caught at API call time.
-        return True
-    # For native OpenAI, check against known compatible models
-    return any(model.startswith(m) for m in _MODELS_WITH_JSON_SCHEMA)
-
-
 _openai_initialized = False
 
 
@@ -108,7 +106,7 @@ class _RawJsonSchema(AgentOutputSchemaBase):
     """
 
     def __init__(self, schema: dict[str, Any], is_native: bool) -> None:
-        self._schema = schema
+        self._schema = _make_strict(schema) if is_native else schema
         self._is_native = is_native
 
     def is_plain_text(self) -> bool:
@@ -387,14 +385,6 @@ class OpenAIProvider(AgentProvider):
             if options.reasoning_config:
                 agent_kwargs["model_settings"] = self._build_model_settings(
                     options.reasoning_config
-                )
-
-            # Validate model supports structured output
-            if options.output_schema and not _model_supports_json_schema(options.model):
-                raise ValueError(
-                    f"Model {options.model} does not support json_schema response format. "
-                    "Only models with structured output support (gpt-4, gpt-4o, etc.) are "
-                    "compatible."
                 )
 
             # Set output_type for structured output

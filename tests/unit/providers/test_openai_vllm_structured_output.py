@@ -1,24 +1,25 @@
 """Tests for OpenAI provider endpoint compatibility.
 
-Tests verify endpoint detection, model support logic, and MCP tool conversion
-for both native OpenAI and custom endpoints (vLLM, etc.).
+Tests verify endpoint detection and MCP tool conversion for both native OpenAI
+and custom endpoints (vLLM, etc.).
 """
 
 import os
+from collections.abc import AsyncIterator
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from lightspeed_agentic.providers.openai import (
+from lightspeed_agentic.providers.openai import (  # type: ignore[import-untyped]
     _build_mcp_function_tools,
     _is_native_openai,
-    _model_supports_json_schema,
 )
 
 
 class TestMCPFunctionTools:
     @pytest.mark.asyncio
-    async def test_converts_tools_from_each_mcp_server(self):
+    async def test_converts_tools_from_each_mcp_server(self) -> None:
         first_server = AsyncMock()
         second_server = AsyncMock()
         first_tool = object()
@@ -42,29 +43,29 @@ class TestMCPFunctionTools:
 class TestNativeOpenAIDetection:
     """Test _is_native_openai() helper."""
 
-    def test_native_openai_by_default(self):
+    def test_native_openai_by_default(self) -> None:
         """When OPENAI_BASE_URL unset, defaults to native OpenAI."""
         with patch.dict(os.environ, {}, clear=False):
             # Remove OPENAI_BASE_URL if set
             os.environ.pop("OPENAI_BASE_URL", None)
             assert _is_native_openai() is True
 
-    def test_native_openai_explicit(self):
+    def test_native_openai_explicit(self) -> None:
         """When OPENAI_BASE_URL is api.openai.com, recognized as native."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "https://api.openai.com/v1"}):
             assert _is_native_openai() is True
 
-    def test_vllm_not_native(self):
+    def test_vllm_not_native(self) -> None:
         """When OPENAI_BASE_URL is vLLM, recognized as non-native."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:8000/v1"}):
             assert _is_native_openai() is False
 
-    def test_custom_endpoint_not_native(self):
+    def test_custom_endpoint_not_native(self) -> None:
         """Custom OpenAI-compatible endpoint detected as non-native."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "https://custom.example.com/v1"}):
             assert _is_native_openai() is False
 
-    def test_invalid_url_defaults_to_false(self):
+    def test_invalid_url_defaults_to_false(self) -> None:
         """Malformed URL handled gracefully, defaults to non-native."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "not-a-valid-url"}):
             assert _is_native_openai() is False
@@ -73,23 +74,23 @@ class TestNativeOpenAIDetection:
 class TestModelSelectionByEndpoint:
     """Test endpoint detection and tool compatibility decisions."""
 
-    def test_native_openai_detected_without_base_url(self):
+    def test_native_openai_detected_without_base_url(self) -> None:
         """When OPENAI_BASE_URL unset, detected as native OpenAI."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OPENAI_BASE_URL", None)
             assert _is_native_openai() is True
 
-    def test_native_openai_detected_with_explicit_api_openai_url(self):
+    def test_native_openai_detected_with_explicit_api_openai_url(self) -> None:
         """When OPENAI_BASE_URL is api.openai.com, detected as native."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "https://api.openai.com/v1"}):
             assert _is_native_openai() is True
 
-    def test_vllm_detected_as_non_native(self):
+    def test_vllm_detected_as_non_native(self) -> None:
         """When OPENAI_BASE_URL is vLLM, detected as non-native endpoint."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:8000/v1"}):
             assert _is_native_openai() is False
 
-    def test_custom_endpoint_detected_as_non_native(self):
+    def test_custom_endpoint_detected_as_non_native(self) -> None:
         """Custom OpenAI-compatible endpoint detected as non-native."""
         custom_urls = [
             "https://custom.example.com/v1",
@@ -100,14 +101,14 @@ class TestModelSelectionByEndpoint:
             with patch.dict(os.environ, {"OPENAI_BASE_URL": url}):
                 assert _is_native_openai() is False, f"Should detect {url} as non-native"
 
-    def test_reasoning_available_with_responses_model(self):
+    def test_reasoning_available_with_responses_model(self) -> None:
         """OpenAIResponsesModel supports reasoning via response deltas."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OPENAI_BASE_URL", None)
             assert _is_native_openai() is True
             # OpenAIResponsesModel emits ResponseReasoningTextDeltaEvent
 
-    def test_vllm_detected_as_non_native_for_chat_completions(self):
+    def test_vllm_detected_as_non_native_for_chat_completions(self) -> None:
         """Custom endpoints use the Chat Completions compatibility path."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:8000/v1"}):
             assert _is_native_openai() is False
@@ -117,22 +118,49 @@ class TestModelSelectionByEndpoint:
 class TestQueryFlowIntegration:
     """Integration tests validating endpoint selection logic."""
 
-    def test_model_supports_json_schema_native_openai(self):
-        """Test model support detection for native OpenAI."""
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("OPENAI_BASE_URL", None)
-            # Supported models
-            assert _model_supports_json_schema("gpt-4") is True
-            assert _model_supports_json_schema("gpt-4o") is True
-            assert _model_supports_json_schema("gpt-4-turbo") is True
-            # Unsupported models
-            assert _model_supports_json_schema("gpt-3.5-turbo") is False
-            assert _model_supports_json_schema("text-davinci-003") is False
+    @pytest.mark.asyncio
+    async def test_native_openai_allows_unlisted_model_with_structured_output(
+        self, tmp_path: Path
+    ) -> None:
+        """Native models are not rejected by a stale local model allowlist."""
+        from lightspeed_agentic.providers.openai import OpenAIProvider
+        from lightspeed_agentic.types import ProviderQueryOptions  # type: ignore[import-untyped]
 
-    def test_model_supports_json_schema_custom_endpoint(self):
-        """Test model support detection for custom endpoints (vLLM, etc.)."""
-        with patch.dict(os.environ, {"OPENAI_BASE_URL": "http://localhost:8000/v1"}):
-            # Custom endpoints assume support (failures caught at API call time)
-            assert _model_supports_json_schema("gpt-3.5-turbo") is True
-            assert _model_supports_json_schema("meta-llama/Llama-2-7b") is True
-            assert _model_supports_json_schema("any-model") is True
+        async def empty_stream() -> AsyncIterator[None]:
+            return
+            yield
+
+        mock_result = AsyncMock()
+        mock_result.stream_events = empty_stream
+        mock_result.final_output = "{}"
+        mock_result.context_wrapper.usage.input_tokens = 0
+        mock_result.context_wrapper.usage.output_tokens = 0
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch("agents.sandbox.SandboxAgent", return_value=object()) as sandbox_agent,
+            patch("agents.Runner.run_streamed", return_value=mock_result),
+            patch("agents.models.openai_responses.OpenAIResponsesModel"),
+            patch("openai.AsyncOpenAI"),
+        ):
+            os.environ.pop("OPENAI_BASE_URL", None)
+            options = ProviderQueryOptions(
+                prompt="test",
+                system_prompt="test",
+                model="gpt-5.6-luna",
+                max_turns=1,
+                allowed_tools=[],
+                cwd=str(tmp_path),
+                output_schema={
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            )
+            provider = OpenAIProvider()
+            [event async for event in provider.query(options)]
+
+        assert sandbox_agent.called
+        output_type = sandbox_agent.call_args.kwargs["output_type"]
+        assert output_type.is_strict_json_schema() is True
+        assert output_type.json_schema()["additionalProperties"] is False
+        assert output_type.json_schema()["required"] == ["answer"]

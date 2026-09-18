@@ -56,7 +56,7 @@ _e2e_trim() {
 }
 
 IMAGE="$(_e2e_trim "${IMAGE:-}")"
-if [[ -z "${IMAGE}" || -z "${IMAGE// }" ]]; then
+if [[ -z "${IMAGE}" || -z "${IMAGE// /}" ]]; then
     IMAGE="quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-agentic-sandbox:main"
 fi
 export SANDBOX_IMAGE="$(_e2e_trim "${SANDBOX_IMAGE:-${IMAGE}}")"
@@ -96,14 +96,14 @@ apply_model_override() {
     local provider="$1"
     local model="$2"
     case "${provider}" in
-        anthropic-vertex-deepagents) export ANTHROPIC_MODEL="${model}" ;;
-        anthropic-bedrock-deepagents) export ANTHROPIC_BEDROCK_MODEL="${model}" ;;
-        gemini-vertex-adk) export GEMINI_MODEL="${model}" ;;
-        openai-agents) export OPENAI_MODEL="${model}" ;;
-        *)
-            echo "e2e: unknown provider for model override: ${provider}" >&2
-            exit 1
-            ;;
+    anthropic-vertex-deepagents) export ANTHROPIC_MODEL="${model}" ;;
+    anthropic-bedrock-deepagents) export ANTHROPIC_BEDROCK_MODEL="${model}" ;;
+    gemini-vertex-adk) export GEMINI_MODEL="${model}" ;;
+    openai-agents) export OPENAI_MODEL="${model}" ;;
+    *)
+        echo "e2e: unknown provider for model override: ${provider}" >&2
+        exit 1
+        ;;
     esac
 }
 
@@ -111,26 +111,26 @@ sync_provider_model() {
     local provider="$1"
     unset LIGHTSPEED_MODEL
     case "${provider}" in
-        anthropic-vertex-deepagents)
-            export LIGHTSPEED_MODEL="${ANTHROPIC_MODEL:-}"
-            export ANTHROPIC_MODEL="${LIGHTSPEED_MODEL}"
-            ;;
-        anthropic-bedrock-deepagents)
-            export LIGHTSPEED_MODEL="${ANTHROPIC_BEDROCK_MODEL:-}"
-            export ANTHROPIC_MODEL="${LIGHTSPEED_MODEL}"
-            ;;
-        gemini-vertex-adk)
-            export LIGHTSPEED_MODEL="${GEMINI_MODEL:-}"
-            export GEMINI_MODEL="${LIGHTSPEED_MODEL}"
-            ;;
-        openai-agents)
-            export LIGHTSPEED_MODEL="${OPENAI_MODEL:-}"
-            export OPENAI_MODEL="${LIGHTSPEED_MODEL}"
-            ;;
-        *)
-            echo "e2e: unknown provider: ${provider}" >&2
-            exit 1
-            ;;
+    anthropic-vertex-deepagents)
+        export LIGHTSPEED_MODEL="${ANTHROPIC_MODEL:-}"
+        export ANTHROPIC_MODEL="${LIGHTSPEED_MODEL}"
+        ;;
+    anthropic-bedrock-deepagents)
+        export LIGHTSPEED_MODEL="${ANTHROPIC_BEDROCK_MODEL:-}"
+        export ANTHROPIC_MODEL="${LIGHTSPEED_MODEL}"
+        ;;
+    gemini-vertex-adk)
+        export LIGHTSPEED_MODEL="${GEMINI_MODEL:-}"
+        export GEMINI_MODEL="${LIGHTSPEED_MODEL}"
+        ;;
+    openai-agents)
+        export LIGHTSPEED_MODEL="${OPENAI_MODEL:-}"
+        export OPENAI_MODEL="${LIGHTSPEED_MODEL}"
+        ;;
+    *)
+        echo "e2e: unknown provider: ${provider}" >&2
+        exit 1
+        ;;
     esac
 }
 
@@ -168,31 +168,31 @@ _install_vertex_cluster_creds() {
 _install_provider_cluster_creds() {
     local provider="$1"
     case "${provider}" in
-        openai-agents)
-            if [ -n "${OPENAI_PROVIDER_KEY_PATH:-}" ]; then
-                OPENAI_PROVIDER_KEY_PATH="${OPENAI_PROVIDER_KEY_PATH}" \
-                    bash "${ROOT}/scripts/e2e-install-openai-creds.sh"
-            elif [ -n "${OPENAI_API_KEY:-}" ]; then
-                OPENAI_API_KEY="${OPENAI_API_KEY}" \
-                    bash "${ROOT}/scripts/e2e-install-openai-creds.sh"
-            else
-                echo "e2e: OPENAI_API_KEY or OPENAI_PROVIDER_KEY_PATH required for openai-agents" >&2
-                exit 1
-            fi
-            ;;
-        gemini-vertex-adk)
-            _install_vertex_cluster_creds "llm-creds-vertex"
-            ;;
-        anthropic-vertex-deepagents)
-            _install_vertex_cluster_creds "llm-creds-anthropic"
-            ;;
-        anthropic-bedrock-deepagents)
-            bash "${ROOT}/scripts/e2e-install-bedrock-creds.sh"
-            ;;
-        *)
-            echo "e2e: unknown provider: ${provider}" >&2
+    openai-agents)
+        if [ -n "${OPENAI_PROVIDER_KEY_PATH:-}" ]; then
+            OPENAI_PROVIDER_KEY_PATH="${OPENAI_PROVIDER_KEY_PATH}" \
+                bash "${ROOT}/scripts/e2e-install-openai-creds.sh"
+        elif [ -n "${OPENAI_API_KEY:-}" ]; then
+            OPENAI_API_KEY="${OPENAI_API_KEY}" \
+                bash "${ROOT}/scripts/e2e-install-openai-creds.sh"
+        else
+            echo "e2e: OPENAI_API_KEY or OPENAI_PROVIDER_KEY_PATH required for openai-agents" >&2
             exit 1
-            ;;
+        fi
+        ;;
+    gemini-vertex-adk)
+        _install_vertex_cluster_creds "llm-creds-vertex"
+        ;;
+    anthropic-vertex-deepagents)
+        _install_vertex_cluster_creds "llm-creds-anthropic"
+        ;;
+    anthropic-bedrock-deepagents)
+        bash "${ROOT}/scripts/e2e-install-bedrock-creds.sh"
+        ;;
+    *)
+        echo "e2e: unknown provider: ${provider}" >&2
+        exit 1
+        ;;
     esac
 }
 
@@ -203,18 +203,18 @@ _configure_batch_job_env() {
 
     if [ -z "${LIGHTSPEED_REASONING_CONFIG:-}" ]; then
         case "${provider}" in
-            openai-agents)
-                export LIGHTSPEED_REASONING_CONFIG='{"effort":"low"}'
-                ;;
-            gemini-vertex-adk)
-                export LIGHTSPEED_REASONING_CONFIG='{"thinking_budget":1024}'
-                ;;
-            anthropic-vertex-deepagents)
-                export LIGHTSPEED_REASONING_CONFIG='{"thinking":{"type":"enabled","budget_tokens":1024}}'
-                ;;
-            anthropic-bedrock-deepagents)
-                export LIGHTSPEED_REASONING_CONFIG='{"thinking":{"type":"enabled","budget_tokens":1024}}'
-                ;;
+        openai-agents)
+            export LIGHTSPEED_REASONING_CONFIG='{"effort":"low"}'
+            ;;
+        gemini-vertex-adk)
+            export LIGHTSPEED_REASONING_CONFIG='{"thinking_budget":1024}'
+            ;;
+        anthropic-vertex-deepagents)
+            export LIGHTSPEED_REASONING_CONFIG='{"thinking":{"type":"enabled","budget_tokens":1024}}'
+            ;;
+        anthropic-bedrock-deepagents)
+            export LIGHTSPEED_REASONING_CONFIG='{"thinking":{"type":"enabled","budget_tokens":1024}}'
+            ;;
         esac
     fi
 
@@ -309,18 +309,18 @@ shift || true
 # Each provider has its own env var: OPENAI_MODEL, GEMINI_MODEL, ANTHROPIC_MODEL, ANTHROPIC_BEDROCK_MODEL
 model_override=""
 case "${provider}" in
-    openai-agents)
-        model_override="${OPENAI_MODEL:-}"
-        ;;
-    gemini-vertex-adk)
-        model_override="${GEMINI_MODEL:-}"
-        ;;
-    anthropic-vertex-deepagents)
-        model_override="${ANTHROPIC_MODEL:-}"
-        ;;
-    anthropic-bedrock-deepagents)
-        model_override="${ANTHROPIC_BEDROCK_MODEL:-}"
-        ;;
+openai-agents)
+    model_override="${OPENAI_MODEL:-}"
+    ;;
+gemini-vertex-adk)
+    model_override="${GEMINI_MODEL:-}"
+    ;;
+anthropic-vertex-deepagents)
+    model_override="${ANTHROPIC_MODEL:-}"
+    ;;
+anthropic-bedrock-deepagents)
+    model_override="${ANTHROPIC_BEDROCK_MODEL:-}"
+    ;;
 esac
 
 # Parse remaining arguments as pytest args (optionally after --)
