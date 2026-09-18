@@ -54,7 +54,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 24. **Default allowed tools list.** Shared default names: `Bash`, `Read`, `Glob`, `Grep`, `Skill`. `run_agent_query()` always passes this list unless a future contract exposes overrides. [PLANNED: OLS-3033]
 
-25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text.
+25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text. [PLANNED: OLS-3928] DeepAgents MUST NOT log tool arguments or inspected tool-result content. It can log only controlled inspection fields and safe tool metadata.
 
 26. **Stringifying tool I/O.** Non-string tool arguments and results are JSON-serialized for events when the SDK exposes structured objects.
 
@@ -93,6 +93,22 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
     | Azure Entra ID (OLS-3050) | `client_id` / `tenant_id` / `client_secret` | `azure.identity` `ClientSecretCredential` via `azure_ad_token_provider` (rule 29) |
     | AWS Bedrock (OLS-4092) | `aws_access_key_id` / `aws_secret_access_key` + optional `role_arn` | `botocore` credential-provider chain: with `role_arn` it performs STS assume-role and refreshes the short-lived credentials (see `configuration.md` rule 9b). The Anthropic-on-Bedrock model path is unchanged. |
 
+### Tool-Result Prompt-Injection Inspection [PLANNED: OLS-3928]
+
+39. **Normative source.** The sandbox MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
+
+40. **Runtime coverage.** The guarded adapter is DeepAgents only. Gemini and OpenAI adapters remain unchanged. Selection of an unguarded adapter MUST NOT cause a runtime warning.
+
+41. **Interception point.** DeepAgents middleware, or an equivalent tool wrapper, MUST inspect each effective model-visible result. Inspection occurs after artifact offload and before delivery to the main model or `ToolResultEvent` emission.
+
+42. **Model integration.** The middleware MUST construct the isolated classifier from the resolved DeepAgents model configuration. It MUST omit the main agent's reasoning configuration.
+
+43. **Local paths.** The interception paths include normal results, tool-generated errors, shell output, MCP output, file reads, and search results. They also include offload previews and references. Each later model-visible artifact read or search result MUST pass through the same middleware.
+
+44. **Event boundary.** After a pass, the adapter MUST send a payload-free `ToolResultEvent` to `EventLogger` and `AuditLogger`. This event can contain safe metadata and controlled inspection fields. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and emit no result event.
+
+45. **Disabled behavior.** When `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` is false, the middleware MUST skip inspection calls and inspection-based termination. The main-system safety instruction remains active for every provider.
+
 ## Configuration Surface
 
 | Mechanism | Purpose |
@@ -117,6 +133,9 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 ## Verification
 
 - Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output strategy when thinking is configured
+- [PLANNED: OLS-3928] Fast mock tests verify contract conformance, offloaded read paths, disabled inspection, and controlled sandbox failure.
+- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They verify payload-free accepted logger events and rejected-event suppression. They also verify controlled termination without a Result CR.
+- The cross-repository real-model corpus and reporting requirements are owned by `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
 - Live batch: [skills.feature](../../../tests/e2e/features/skills.feature), [structured_output.feature](../../../tests/e2e/features/structured_output.feature), [mcp.feature](../../../tests/e2e/features/mcp.feature), [reasoning_config.feature](../../../tests/e2e/features/reasoning_config.feature)
 - Harness helpers: [test_batch_e2e_helpers.py](../../../tests/test_batch_e2e_helpers.py) (no cluster)
 
@@ -128,3 +147,4 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 - Wire operator-resolved `Agent.spec.maxTurns` through `LIGHTSPEED_AGENT_MAX_TURNS` to each provider-native iteration limit. [PLANNED: OLS-3743]
 - DeepAgents: token-level streaming via `astream_events()` instead of batch `stream_mode="messages"`. [PLANNED: OLS-3500]
 - DeepAgents: `allowed_tools` filtering at `create_deep_agent(tools=...)` construction. [PLANNED: OLS-3500]
+- [PLANNED: OLS-3928] DeepAgents-only inspection of every model-visible tool result and error.

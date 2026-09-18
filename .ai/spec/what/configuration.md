@@ -20,6 +20,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
     | `LIGHTSPEED_REASONING_CONFIG` | No | JSON-serialized reasoning config from `Agent.spec.reasoningConfig`. When absent, SDK defaults apply. |
     | `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` | Yes [PLANNED: OLS-3743] | Whole-agent invocation budget resolved from the selected Agent step timeout or the operator default. |
     | `LIGHTSPEED_AGENT_MAX_TURNS` | Yes [PLANNED: OLS-3743] | Provider iteration cap resolved from `Agent.spec.maxTurns` or the operator default of 200. |
+    | `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` | No [PLANNED: OLS-3928] | Enable DeepAgents tool-result inspection. Default: `true`. |
 
     Credentials are mounted via `envFrom` (all secret keys as env vars) AND as files at `/var/run/secrets/llm-credentials/`.
 
@@ -144,6 +145,16 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 22. **MCP transport.** The sandbox MUST use Streamable HTTP as the MCP transport when connecting to remote MCP servers. SSE transport (deprecated in MCP spec since 2025-03-26) MUST NOT be used for new connections.
 
+22a. **Tool-result inspection** [PLANNED: OLS-3928]. Configuration MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`. `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` controls the local DeepAgents middleware.
+
+22b. The value MUST default to `true` when the variable is absent or empty.
+
+22c. The sandbox MUST accept only case-insensitive `true` and `false` values. Another non-empty value MUST fail startup.
+
+22d. A `false` value MUST skip classifier calls and inspection-based termination. Main-model tool-safety instructions remain active.
+
+22e. The value MUST NOT change Gemini ADK or OpenAI Agents behavior.
+
 ## Configuration Surface
 
 | Variable / field | Role |
@@ -178,6 +189,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 | `/var/secrets/mcp/<secretName>/` | MCP header secret files mounted by operator for `Secret`-sourced headers. |
 | `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` | [PLANNED: OLS-3743] Required whole-agent invocation timeout from the operator. |
 | `LIGHTSPEED_AGENT_MAX_TURNS` | [PLANNED: OLS-3743] Required provider iteration cap from the operator. |
+| `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` | [PLANNED: OLS-3928] DeepAgents tool-result inspection; defaults to `true`. |
 | `resolve_router_model()`, `resolve_startup_model()` | Model resolution from env (see `config.py`). |
 
 ## Constraints
@@ -198,3 +210,4 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 - Konflux pipeline and lockfile policy updates as Red Hat platform requirements evolve. [PLANNED: OLS-2894]
 - `Client` header source type resolution when client-passthrough MCP auth flows are implemented.
 - [PLANNED: OLS-3743] Require operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS`; remove the sandbox-owned timeout and turn defaults.
+- [PLANNED: OLS-3928] Add DeepAgents-only tool-result inspection controlled by `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED`.
