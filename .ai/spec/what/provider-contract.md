@@ -14,9 +14,9 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 4. **Content block stop (`content_block_stop`).** Signals that a content or tool block has completed; used by logging to flush buffered thinking.
 
-5. **Tool call (`tool_call`).** Carries the tool name and a string representation of inputs (length-truncated per internal adapter limits).
+5. **Tool call (`tool_call`).** Carries the tool name and a complete string representation of inputs. Provider adapters MUST NOT length-truncate this value; only EventLogger MAY truncate its developer-log rendering (rules 25 and 40).
 
-6. **Tool result (`tool_result`).** Carries stringified tool output (length-truncated per internal adapter limits).
+6. **Tool result (`tool_result`).** Carries a complete string representation of tool output. Provider adapters MUST NOT length-truncate this value; only EventLogger MAY truncate its developer-log rendering (rules 25 and 40).
 
 7. **Result (`result`).** Terminal event: final text payload (may be JSON or plain text depending on structured-output path), input/output token counts, reasoning token count, and response model metadata.
 
