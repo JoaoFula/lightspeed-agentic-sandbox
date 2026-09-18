@@ -9,10 +9,170 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def test_adds_additional_properties_false() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict  # type: ignore[import-untyped]
+
+    schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+    result = _make_strict(schema)
+    assert result["additionalProperties"] is False
+
+
+def test_sets_required_to_all_keys() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+        "required": ["name"],
+    }
+    result = _make_strict(schema)
+    assert sorted(result["required"]) == ["age", "name"]
+
+
+def test_adds_required_when_missing() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+    result = _make_strict(schema)
+    assert result["required"] == ["x"]
+
+
+def test_recurses_into_nested_objects() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {
+        "type": "object",
+        "properties": {"inner": {"type": "object", "properties": {"val": {"type": "string"}}}},
+    }
+    result = _make_strict(schema)
+    inner = result["properties"]["inner"]
+    assert inner["additionalProperties"] is False
+    assert inner["required"] == ["val"]
+
+
+def test_recurses_into_array_items() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items_list": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"id": {"type": "integer"}}},
+            }
+        },
+    }
+    result = _make_strict(schema)
+    items_obj = result["properties"]["items_list"]["items"]
+    assert items_obj["additionalProperties"] is False
+    assert items_obj["required"] == ["id"]
+
+
+def test_recurses_into_anyof() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {
+        "anyOf": [
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            {"type": "string"},
+        ]
+    }
+    result = _make_strict(schema)
+    assert result["anyOf"][0]["additionalProperties"] is False
+    assert result["anyOf"][0]["required"] == ["a"]
+    assert result["anyOf"][1] == {"type": "string"}
+
+
+def test_converts_oneof_to_anyof() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {"oneOf": [{"type": "object", "properties": {"b": {"type": "integer"}}}]}
+    result = _make_strict(schema)
+    assert "oneOf" not in result
+    assert result["anyOf"][0]["additionalProperties"] is False
+
+
+def test_oneof_preserves_existing_anyof() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {
+        "anyOf": [{"type": "object", "properties": {"x": {"type": "string"}}}],
+        "oneOf": [{"type": "object", "properties": {"y": {"type": "integer"}}}],
+    }
+    result = _make_strict(schema)
+    assert "oneOf" not in result
+    assert len(result["anyOf"]) == 2
+    assert result["anyOf"][0]["additionalProperties"] is False
+    assert result["anyOf"][1]["additionalProperties"] is False
+
+
+def test_recurses_into_allof() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    result = _make_strict({"allOf": [{"type": "object", "properties": {"c": {"type": "boolean"}}}]})
+    assert result["allOf"][0]["additionalProperties"] is False
+
+
+def test_recurses_into_not() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    result = _make_strict({"not": {"type": "object", "properties": {"d": {"type": "string"}}}})
+    assert result["not"]["additionalProperties"] is False
+
+
+def test_recurses_into_defs() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    result = _make_strict(
+        {"$defs": {"thing": {"type": "object", "properties": {"e": {"type": "string"}}}}}
+    )
+    assert result["$defs"]["thing"]["additionalProperties"] is False
+
+
+def test_does_not_modify_original() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+    _make_strict(schema)
+    assert "additionalProperties" not in schema
+
+
+def test_non_object_passthrough() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    assert _make_strict({"type": "string"}) == {"type": "string"}
+
+
+def test_non_dict_passthrough() -> None:
+    from lightspeed_agentic.providers.openai import _make_strict
+
+    schema: Any = "not a dict"
+    assert _make_strict(schema) == "not a dict"
+
+
+def test_native_openai_schema_adds_strict_requirements() -> None:
+    from lightspeed_agentic.providers.openai import _RawJsonSchema
+
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    wrapper = _RawJsonSchema(schema, is_native=True)
+    assert wrapper.json_schema()["additionalProperties"] is False
+    assert wrapper.is_strict_json_schema() is True
+    assert "additionalProperties" not in schema
+
+
+def test_custom_endpoint_keeps_schema_non_strict() -> None:
+    from lightspeed_agentic.providers.openai import _RawJsonSchema
+
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    wrapper = _RawJsonSchema(schema, is_native=False)
+    assert wrapper.is_strict_json_schema() is False
+    assert "additionalProperties" not in wrapper.json_schema()
+
+
 def test_build_manifest_parent_of_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
     """Manifest root should be cwd's parent so exec_command reaches the full workspace."""
     monkeypatch.delenv("E2E_OUTPUT_DIR", raising=False)
-    from lightspeed_agentic.providers.openai import _build_manifest  # type: ignore[import-untyped]
+    from lightspeed_agentic.providers.openai import _build_manifest
 
     manifest = _build_manifest(str(Path("/app/skills").parent))
     assert manifest.root == "/app"
