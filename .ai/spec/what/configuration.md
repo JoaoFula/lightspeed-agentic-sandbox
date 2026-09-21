@@ -20,6 +20,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
     | `LIGHTSPEED_REASONING_CONFIG` | No | JSON-serialized reasoning config from `Agent.spec.reasoningConfig`. When absent, SDK defaults apply. |
     | `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` | Yes [PLANNED: OLS-3743] | Whole-agent invocation budget resolved from the selected Agent step timeout or the operator default. |
     | `LIGHTSPEED_AGENT_MAX_TURNS` | Yes [PLANNED: OLS-3743] | Provider iteration cap resolved from `Agent.spec.maxTurns` or the operator default of 200. |
+    | `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` | No [PLANNED: OLS-3928] | Enable DeepAgents tool-result inspection. Default: `true`. |
 
     Credentials are mounted via `envFrom` (all secret keys as env vars) AND as files at `/var/run/secrets/llm-credentials/`.
 
@@ -87,6 +88,31 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 11. **OpenAI base URL.** `OPENAI_BASE_URL` overrides the OpenAI client base URL when set. Mapped from `LIGHTSPEED_PROVIDER_URL` by the configuration mapping for `openai` and `vertex`/`OpenAI` providers.
 
+11a. **OpenAI-compatible endpoints (vLLM, local services, RHOAI, RHEL AI).** ([OLS-3053]) When `OPENAI_BASE_URL` is set to a non-api.openai.com URL (e.g. vLLM, local service, RHOAI/RHEL AI deployment), the OpenAI provider adapts endpoint selection and configuration:
+    - **Endpoint selection.** Native OpenAI (api.openai.com or unset) uses `OpenAIResponsesModel` (streaming via `/v1/responses`). Non-native endpoints use `OpenAIChatCompletionsModel` (streaming via `/v1/chat/completions`) to avoid endpoint-specific bugs and ensure compatibility with vLLM and similar strict OpenAI-compatible implementations.
+    - **Structured output.** For non-native endpoints, strict JSON-schema mode is disabled; the model produces plain JSON conforming to the schema without OpenAI's strict-mode enforcement at the first token. Native OpenAI continues to use strict mode for schema compliance guarantees.
+    - **Configuration via operator.** The LLMProvider CRD `url` field maps to `LIGHTSPEED_PROVIDER_URL` (set by the operator), which the sandbox configuration mapping converts to `OPENAI_BASE_URL` (see `provider-contract.md` rule 29). Credentials are mounted from the credentials secret referenced in the LLMProvider, with keys `api_key` (mapped to `OPENAI_API_KEY`) and optional `model` and `base_url` overrides (mapped to `OPENAI_MODEL`, `OPENAI_BASE_URL`). For vLLM and local deployments that do not require authentication, the secret may contain a placeholder value (e.g. `api_key: "EMPTY"` or a dummy token).
+    - **Model support and caveats.** vLLM and other OpenAI-compatible endpoints support tool calling and streaming. Model variants (gpt-3.5-turbo, gpt-4, gpt-4o, or open-weights equivalents) must support function calling to participate in agentic flows. Models without function-calling support will fail at runtime when tools are available. Reasoning configuration (`LIGHTSPEED_REASONING_CONFIG`) is supported on compatible models but may not be available on all vLLM-served models; unsupported reasoning configs fail at API invocation time, not at startup. Structured output validation happens at API time; if a model does not support the requested schema format or produces invalid JSON, the agent fails with a clear error message.
+    - **Example: RHOAI vLLM endpoint.** When an organization deploys a vLLM instance on RHOAI serving a tool-capable model (e.g. Granite 3.x, Llama 2 70B), the secret contains the endpoint URL and model, and the LLMProvider references it:
+        ```yaml
+        apiVersion: agentic.openshift.io/v1alpha1
+        kind: LLMProvider
+        metadata:
+          name: rhoai-vllm
+        spec:
+          type: OpenAI
+          openAI:
+            credentialsSecret:
+              name: rhoai-vllm-creds  # Secret with OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+        ```
+        The credentials secret contains:
+        ```
+        OPENAI_API_KEY: <token-or-placeholder>
+        OPENAI_BASE_URL: https://<rhoai-vllm-host>/v1
+        OPENAI_MODEL: granite-3-8b-instruct  # or other tool-capable model
+        ```
+        The sandbox resolves these env vars from the secret, detects `OPENAI_BASE_URL` is non-native, and uses `OpenAIChatCompletionsModel` for request/response handling.
+
 12. **Anthropic via Vertex.** When `LIGHTSPEED_PROVIDER=vertex` and `LIGHTSPEED_MODEL_PROVIDER=anthropic`, the configuration mapping resolves to SDK name `deepagents` and sets Vertex env vars for `ChatAnthropicVertex`.
 
 13. **[PLANNED: OLS-3743] Maximum turns.** `LIGHTSPEED_AGENT_MAX_TURNS` is required, parsed as an integer from 1 through 500, and passed to `ProviderQueryOptions.max_turns`. Missing, out-of-range, or malformed values fail sandbox startup. The operator resolves omitted `Agent.spec.maxTurns` to 200; the sandbox does not maintain a second default.
@@ -105,6 +131,8 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 20. **MCP server configuration.** When `LIGHTSPEED_MCP_SERVERS` is set, the sandbox MUST parse it as a JSON array of MCP server entries. When the value is present but is not valid JSON or parses to a non-array type, the sandbox MUST fail at startup with a descriptive error (sandbox failure path, `run-api.md` rule 23) — it MUST NOT silently continue with no MCP servers. Each entry has the shape `{"name": string, "url": string, "timeout": int | float, "headers": [{"name": string, "source": string, "secretName"?: string}]}`. JSON booleans MUST NOT be accepted as `timeout` (fall back to default). Invalid server entries (wrong type, missing `name`/`url`, non-array `headers`, malformed header objects, unsupported `source` other than `ServiceAccountToken`, `Secret`, or `Client`) MUST fail at startup with a descriptive error — the sandbox MUST NOT skip entries and continue. When `source` is `Secret` and `secretName` is missing, empty, or not a string, the sandbox MUST skip that header (warn) and continue — it MUST NOT reject the entire server entry. Runtime header resolution failures (missing SA token file, empty secret dir, path traversal) MUST skip the header (warn) and continue. The sandbox MUST build SDK-native MCP client configs from this array and pass them into provider adapters via `ProviderQueryOptions.mcp_servers` (see `provider-contract.md`). When the env var is absent or empty, no MCP servers are configured.
 
+20a. **MCP tool RBAC derivation** [OLS-3680]. When the analysis agent uses MCP tools whose calls require cluster permissions, the RBAC for those calls is derived (per operator-provided analysis instructions) from the tool's `_meta["openshift.io/rbac"]` contract when published by an operator-managed MCP server, and otherwise by expressing the tool step as equivalent `oc` commands (oc-IR) and deriving RBAC from those — consistent with the script-grounded RBAC model. The sandbox enforces nothing itself; derived RBAC is materialized by the operator onto the per-step ServiceAccount before execution. See the workspace-level spec `ols/.ai/spec/what/mcp-tool-rbac.md`.
+
 21. **MCP header resolution.** For each header in an MCP server entry, the sandbox MUST resolve the value based on the `source` field:
 
     | `source` | Resolution |
@@ -116,6 +144,16 @@ Cross-references: how options are consumed in code → `how/provider-architectur
     Note: A stricter deterministic path (`.../<secretName>/<secretName>`) and reject-on-missing-`secretName` were written into this spec via review-only commit `1508589` without code or a follow-up ticket (orphan promise). Current behavior is first-file as above.
 
 22. **MCP transport.** The sandbox MUST use Streamable HTTP as the MCP transport when connecting to remote MCP servers. SSE transport (deprecated in MCP spec since 2025-03-26) MUST NOT be used for new connections.
+
+22a. **Tool-result inspection** [PLANNED: OLS-3928]. Configuration MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`. `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` controls the local DeepAgents middleware.
+
+22b. The value MUST default to `true` when the variable is absent or empty.
+
+22c. The sandbox MUST accept only case-insensitive `true` and `false` values. Another non-empty value MUST fail startup.
+
+22d. A `false` value MUST skip classifier calls and inspection-based termination. Main-model tool-safety instructions remain active.
+
+22e. The value MUST NOT change Gemini ADK or OpenAI Agents behavior.
 
 ## Configuration Surface
 
@@ -151,6 +189,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 | `/var/secrets/mcp/<secretName>/` | MCP header secret files mounted by operator for `Secret`-sourced headers. |
 | `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` | [PLANNED: OLS-3743] Required whole-agent invocation timeout from the operator. |
 | `LIGHTSPEED_AGENT_MAX_TURNS` | [PLANNED: OLS-3743] Required provider iteration cap from the operator. |
+| `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` | [PLANNED: OLS-3928] DeepAgents tool-result inspection; defaults to `true`. |
 | `resolve_router_model()`, `resolve_startup_model()` | Model resolution from env (see `config.py`). |
 
 ## Constraints
@@ -171,3 +210,4 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 - Konflux pipeline and lockfile policy updates as Red Hat platform requirements evolve. [PLANNED: OLS-2894]
 - `Client` header source type resolution when client-passthrough MCP auth flows are implemented.
 - [PLANNED: OLS-3743] Require operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS`; remove the sandbox-owned timeout and turn defaults.
+- [PLANNED: OLS-3928] Add DeepAgents-only tool-result inspection controlled by `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED`.

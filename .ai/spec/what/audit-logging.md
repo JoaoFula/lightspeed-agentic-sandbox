@@ -89,6 +89,16 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 
 18. **Gemini** (`providers/gemini.py`): Emit `gen_ai.choice` with `gen_ai.completion` from text parts (buffered). Emit `gen_ai.reasoning_content` from thought parts when present. Create `execute_tool {name}` spans from function_call/response parts. Set token usage from the stream end.
 
+### Tool-Result Inspection [PLANNED: OLS-3928]
+
+18a. Sandbox telemetry MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
+
+18b. Each DeepAgents inspection MUST create the contract's `tool_result.inspection` span and attach it to the parent agent trace.
+
+18c. The sandbox can add controlled tool, provider, and model identifiers to the contract-defined attributes.
+
+18d. Existing generic inference instrumentation can observe classifier calls. The sandbox MUST add no feature-specific Prometheus metric.
+
 ### Metrics
 
 19. The sandbox MUST record the following `gen_ai.*` Prometheus histograms during agent execution (`metrics.py`). Histograms are **in-process only** (`prometheus_client`); the batch entrypoint MUST NOT expose a `/metrics` HTTP scrape endpoint and MUST NOT export histograms to OTLP or Pushgateway at shutdown. Short-lived one-shot pods are a poor fit for pull-based Prometheus scraping; **OTLP traces** (with `gen_ai.usage.*` on inference spans) are the operational signal when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Unit tests (`tests/test_metrics.py`) verify histogram recording.
@@ -142,3 +152,4 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 - `ols/.ai/spec/what/agentic-data-collection.md` — canonical cross-repository collection contract
 - [OTel GenAI Semantic Conventions v1.41](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/README.md)
 - [OTel MCP Semantic Conventions](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/mcp.md)
+- Parent workspace `ols/.ai/spec/what/tool-result-inspection.md` — cross-repository tool-result inspection contract

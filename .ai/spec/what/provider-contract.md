@@ -48,13 +48,13 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 21. **Thin-adapter principle.** Providers MUST delegate tool execution, command invocation, and skill discovery to their SDKs. Adapters MUST NOT implement custom tool executors that duplicate SDK behavior except for minimal glue (e.g., auto-confirm, path layout).
 
-22. **Structured output.** When `output_schema` is set: DeepAgents converts the JSON schema to a Pydantic model and MUST NOT pass `response_format` to `create_deep_agent()` (native schema binding on the agent pass plus the deepagents tool surface exceeds Bedrock grammar limits and conflicts with extended thinking when enabled). After the agent run completes, the adapter MUST always run a second tool-free `with_structured_output(...)` call on a `ChatAnthropic*` model constructed **without** thinking, using the agent's text output as shaping input. The shape pass uses `method="json_schema"` on direct API and Vertex; on Bedrock it uses `method="function_calling"` because `json_schema` grammar compilation fails for large operator schemas. Phase 1 MAY use thinking when `reasoning_config.thinking` is set; the shape pass MUST NOT enable thinking. Schema conversion supports `properties`, `required`, `type`, `enum`, nested objects, and arrays; does not support `$ref`, `oneOf`, `allOf`, `additionalProperties`. Gemini sets native response MIME type and response schema on the content config. OpenAI wraps the schema for the agents SDK output type with strict JSON-schema mode enabled for native OpenAI endpoints (api.openai.com) and disabled for custom endpoints (vLLM etc. via `OPENAI_BASE_URL`). When strict mode is enabled, the schema is transformed to add `additionalProperties: false` and list all properties as required at every object level, as OpenAI's strict mode requires. Additionally, `oneOf` is rewritten to `anyOf` because OpenAI Structured Outputs rejects `oneOf`; `allOf` is left unchanged.
+22. **Structured output.** When `output_schema` is set: DeepAgents converts the JSON schema to a Pydantic model and MUST NOT pass `response_format` to `create_deep_agent()` (native schema binding on the agent pass plus the deepagents tool surface exceeds Bedrock grammar limits and conflicts with extended thinking when enabled). After the agent run completes, the adapter MUST always run a second tool-free `with_structured_output(...)` call on a `ChatAnthropic*` model constructed **without** thinking, using the agent's text output as shaping input. The shape pass uses `method="json_schema"` on direct API and Vertex; on Bedrock it uses `method="function_calling"` because `json_schema` grammar compilation fails for large operator schemas. Phase 1 MAY use thinking when `reasoning_config.thinking` is set; the shape pass MUST NOT enable thinking. Schema conversion supports `properties`, `required`, `type`, `enum`, nested objects, and arrays; does not support `$ref`, `oneOf`, `allOf`, `additionalProperties`. Gemini sets native response MIME type and response schema on the content config. OpenAI uses two strategies based on endpoint type: **Native OpenAI endpoints** (api.openai.com) wrap the schema for the agents SDK output type with strict JSON-schema mode enabled. When strict mode is enabled, the schema is transformed to add `additionalProperties: false` and list all properties as required at every object level, as OpenAI's strict mode requires. Additionally, `oneOf` is rewritten to `anyOf` because OpenAI Structured Outputs rejects `oneOf`; `allOf` is left unchanged. **Non-native endpoints** (vLLM or OpenAI-compatible via `OPENAI_BASE_URL`) MUST use a two-pass pattern: Phase 1 runs the agent without `response_format` to allow tools to flow freely; Phase 2 runs a tool-free `with_structured_output(..., method="json_schema")` call using the agent's text output as shaping input, analogous to the DeepAgents strategy. Non-native endpoints do not support strict JSON-schema mode, so schema transformation (additionalProperties, oneOf rewrite) is skipped.
 
 23. **Skills.** `cwd` is the skills root. Skill content lives at `cwd/<name>/SKILL.md`. DeepAgents and OpenAI MUST enable their SDK skills mechanism only when at least one immediate subdirectory of `cwd` contains a `SKILL.md` (`has_skills(cwd)`). DeepAgents then passes `skills=[cwd]` to `create_deep_agent()` (`SkillsMiddleware`). OpenAI registers the `Skills` capability with `LocalDirLazySkillSource` rooted at `cwd`; `skills_path="skills/.agents"` is the sandbox materialization path relative to the manifest root (`cwd.parent`), matching the operator emptyDir at `/app/skills/.agents` — it is not a host discovery path. An empty `cwd/.agents` directory MUST NOT enable skills. Gemini loads a skill toolset from the skill directory listing and omits it when none are found.
 
 24. **Default allowed tools list.** Shared default names: `Bash`, `Read`, `Glob`, `Grep`, `Skill`. `run_agent_query()` always passes this list unless a future contract exposes overrides. [PLANNED: OLS-3033]
 
-25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text.
+25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text. [PLANNED: OLS-3928] DeepAgents MUST NOT log tool arguments or inspected tool-result content. It can log only controlled inspection fields and safe tool metadata.
 
 26. **Stringifying tool I/O.** Non-string tool arguments and results are JSON-serialized for events when the SDK exposes structured objects.
 
@@ -88,7 +88,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 38. **SDK-delegated short-lived tokens.** For providers that authenticate with short-lived access tokens derived from a long-lived credential, the sandbox mounts only the **long-lived** credential and delegates all short-lived token minting and refresh to the provider SDK's own credential object. The sandbox MUST NOT implement a token cache, refresh timer, or manual expiry/leeway logic. Because the sandbox reads the long-lived credential once at startup (one-shot batch process, no credential hot-reload), only the short-lived token is refreshed in-run — which is all a single run needs. Instances:
 
     | Provider | Long-lived credential (mounted) | SDK that mints/refreshes the short-lived token |
-    |---|---|---|
+    | --- | --- | --- |
     | Vertex (existing) | `GOOGLE_APPLICATION_CREDENTIALS` service-account key | google-auth |
     | Azure Entra ID (OLS-3050) | `client_id` / `tenant_id` / `client_secret` | `azure.identity` `ClientSecretCredential` via `azure_ad_token_provider` (rule 29) |
     | AWS Bedrock (OLS-4092) | `aws_access_key_id` / `aws_secret_access_key` + optional `role_arn` | `botocore` credential-provider chain: with `role_arn` it performs STS assume-role and refreshes the short-lived credentials (see `configuration.md` rule 9b). The Anthropic-on-Bedrock model path is unchanged. |
@@ -111,10 +111,26 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 46. [PLANNED: OLS-3569] Adapters MUST preserve the same tool name and stable call ID across each tool call/result pair and the corresponding operational tool span, retain complete input and output, and normalize result status to `ok` or `error`. When the SDK omits a call ID, the adapter MUST generate one stable ID for the pair.
 
+### Tool-Result Prompt-Injection Inspection [PLANNED: OLS-3928]
+
+ 1. **Normative source.** The sandbox MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
+
+ 2. **Runtime coverage.** The guarded adapter is DeepAgents only. Gemini and OpenAI adapters remain unchanged. Selection of an unguarded adapter MUST NOT cause a runtime warning.
+
+ 3. **Interception point.** DeepAgents middleware, or an equivalent tool wrapper, MUST inspect each effective model-visible result. Inspection occurs after artifact offload and before delivery to the main model or `ToolResultEvent` emission.
+
+ 4. **Model integration.** The middleware MUST construct the isolated classifier from the resolved DeepAgents model configuration. It MUST omit the main agent's reasoning configuration.
+
+ 5. **Local paths.** The interception paths include normal results, tool-generated errors, shell output, MCP output, file reads, and search results. They also include offload previews and references. Each later model-visible artifact read or search result MUST pass through the same middleware.
+
+ 6. **Event boundary.** After a pass, the adapter MUST send the complete normalized `ToolResultEvent` to `AuditLogger` so content trace events retain the full tool result required by rules 39–46. `EventLogger` MAY truncate only its developer-log rendering under rule 40. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and emit no result event.
+
+ 7. **Disabled behavior.** When `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` is false, the middleware MUST skip inspection calls and inspection-based termination. The main-system safety instruction remains active for every provider.
+
 ## Configuration Surface
 
 | Mechanism | Purpose |
-|-----------|---------|
+| ----------- | --------- |
 | `ProviderQueryOptions.*` | All option fields listed above (set by router, not raw HTTP for most fields). |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Gemini: Vertex vs consumer API behavior and tool mix. Set internally by configuration mapping (see `configuration.md` rule 2), not by operator. |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. Set internally by configuration mapping, not by operator. |
@@ -135,6 +151,9 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 ## Verification
 
 - Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output strategy when thinking is configured
+- [PLANNED: OLS-3928] Fast mock tests verify contract conformance, offloaded read paths, disabled inspection, and controlled sandbox failure.
+- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They verify payload-free accepted logger events and rejected-event suppression. They also verify controlled termination without a Result CR.
+- The cross-repository real-model corpus and reporting requirements are owned by `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
 - Live batch: [skills.feature](../../../tests/e2e/features/skills.feature), [structured_output.feature](../../../tests/e2e/features/structured_output.feature), [mcp.feature](../../../tests/e2e/features/mcp.feature), [reasoning_config.feature](../../../tests/e2e/features/reasoning_config.feature)
 - Harness helpers: [test_batch_e2e_helpers.py](../../../tests/test_batch_e2e_helpers.py) (no cluster)
 
@@ -146,3 +165,4 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 - Wire operator-resolved `Agent.spec.maxTurns` through `LIGHTSPEED_AGENT_MAX_TURNS` to each provider-native iteration limit. [PLANNED: OLS-3743]
 - DeepAgents: token-level streaming via `astream_events()` instead of batch `stream_mode="messages"`. [PLANNED: OLS-3500]
 - DeepAgents: `allowed_tools` filtering at `create_deep_agent(tools=...)` construction. [PLANNED: OLS-3500]
+- [PLANNED: OLS-3928] DeepAgents-only inspection of every model-visible tool result and error.

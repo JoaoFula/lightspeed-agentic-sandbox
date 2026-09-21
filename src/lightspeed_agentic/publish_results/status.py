@@ -24,6 +24,7 @@ CONDITION_COMPLETED = "Completed"
 REASON_STEP_STARTED = "StepStarted"
 REASON_SUCCEEDED = "Succeeded"
 REASON_FAILED = "Failed"
+REASON_AGENT_TIMEOUT = "AgentTimeout"
 
 ACTION_REQUIRED_TRUE = "True"
 ACTION_REQUIRED_FALSE = "False"
@@ -46,6 +47,7 @@ _MAX_LEN_VERIFICATION_STEP_COMMAND = 4096
 _MAX_LEN_VERIFICATION_STEP_EXPECTED = 1024
 _MAX_LEN_VERIFICATION_STEP_TYPE = 256
 _MAX_LEN_RBAC_JUSTIFICATION = 1024
+_MAX_OPTIONS = 10
 
 # Result kind → agent output keys copied into status (schema-owned shapes).
 _STATUS_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
@@ -73,9 +75,19 @@ def build_conditions(
     started_at: datetime,
     completed_at: datetime,
     succeeded: bool,
+    timed_out: bool = False,
 ) -> list[dict[str, Any]]:
     """Build Started + Completed conditions for a Result CR status."""
-    completed_reason = REASON_SUCCEEDED if succeeded else REASON_FAILED
+    if timed_out:
+        completed_reason = REASON_AGENT_TIMEOUT
+        completed_message = "Agent invocation timeout"
+    elif succeeded:
+        completed_reason = REASON_SUCCEEDED
+        completed_message = "Step completed"
+    else:
+        completed_reason = REASON_FAILED
+        completed_message = "Step failed"
+
     return [
         {
             "type": CONDITION_STARTED,
@@ -88,7 +100,7 @@ def build_conditions(
             "type": CONDITION_COMPLETED,
             "status": "True",
             "reason": completed_reason,
-            "message": "Step completed" if succeeded else "Step failed",
+            "message": completed_message,
             "lastTransitionTime": format_condition_time(completed_at),
         },
     ]
@@ -154,6 +166,14 @@ def _truncate(value: str, max_len: int) -> str:
     return value[:max_len]
 
 
+def _sanitize_diagnosis(diag: dict[str, Any]) -> None:
+    """Truncate diagnosis string fields to CRD maxLength limits."""
+    if isinstance(diag.get("summary"), str):
+        diag["summary"] = _truncate(diag["summary"], _MAX_LEN_DIAGNOSIS_SUMMARY)
+    if isinstance(diag.get("rootCause"), str):
+        diag["rootCause"] = _truncate(diag["rootCause"], _MAX_LEN_DIAGNOSIS_ROOT_CAUSE)
+
+
 def _sanitize_analysis_options(
     options: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -166,6 +186,13 @@ def _sanitize_analysis_options(
     """
     errors: list[str] = []
     options[:] = [o for o in options if isinstance(o, dict)]
+    if len(options) > _MAX_OPTIONS:
+        logger.warning(
+            "analysis options truncated from %d to %d (CRD limit)",
+            len(options),
+            _MAX_OPTIONS,
+        )
+        options[:] = options[:_MAX_OPTIONS]
     for idx, opt in enumerate(options):
         # --- truncate top-level option fields ---
         if isinstance(opt.get("title"), str):
@@ -181,8 +208,7 @@ def _sanitize_analysis_options(
             has_summary = isinstance(diag.get("summary"), str) and diag["summary"]
             has_root = isinstance(diag.get("rootCause"), str) and diag["rootCause"]
             if has_summary and has_root:
-                diag["summary"] = _truncate(diag["summary"], _MAX_LEN_DIAGNOSIS_SUMMARY)
-                diag["rootCause"] = _truncate(diag["rootCause"], _MAX_LEN_DIAGNOSIS_ROOT_CAUSE)
+                _sanitize_diagnosis(diag)
                 diag_valid = True
             else:
                 errors.append(f"option {idx}: incomplete diagnosis")
@@ -262,6 +288,7 @@ def build_status(
     completed_at: datetime,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    timed_out: bool = False,
 ) -> dict[str, Any]:
     """Assemble a Result CR status dict from agent output and lifecycle metadata.
 
@@ -275,6 +302,8 @@ def build_status(
         Sandbox-level agent failure message (infra success, agent failed).
     started_at, completed_at:
         Wall-clock bounds for Started / Completed conditions.
+    timed_out:
+        Whether the agent invocation timed out (structured flag, not inferred from summary).
     """
     fields = _STATUS_FIELDS_BY_KIND.get(kind)
     if fields is None:
@@ -282,7 +311,12 @@ def build_status(
         raise ValueError(msg)
 
     resolved_failure = _infer_failure_reason(agent_output, failure_reason)
-    succeeded = _agent_succeeded(agent_output, resolved_failure)
+    if timed_out and resolved_failure is None:
+        summary = agent_output.get("summary")
+        resolved_failure = (
+            summary if isinstance(summary, str) and summary else "Agent invocation timeout"
+        )
+    succeeded = _agent_succeeded(agent_output, resolved_failure) and not timed_out
 
     status: dict[str, Any] = {}
     if resolved_failure is not None:
@@ -304,6 +338,9 @@ def build_status(
             status["failureReason"] = reason
             succeeded = False
 
+    if kind == "AnalysisResult" and isinstance(status.get("diagnosis"), dict):
+        _sanitize_diagnosis(status["diagnosis"])
+
     _strip_empty_values(status)
 
     status["tokenUsage"] = {
@@ -314,5 +351,6 @@ def build_status(
         started_at=started_at,
         completed_at=completed_at,
         succeeded=succeeded,
+        timed_out=timed_out,
     )
     return status

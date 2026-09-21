@@ -65,6 +65,18 @@ class TestBuildStatusAnalysis:
         assert "failureReason" not in status
         assert status["conditions"][1]["reason"] == "Succeeded"
 
+    def test_truncates_top_level_diagnosis_fields(self) -> None:
+        agent = {
+            "options": [],
+            "diagnosis": {
+                "summary": "x" * 10000,
+                "rootCause": "y" * 2000,
+            },
+        }
+        status = build_status("AnalysisResult", agent, started_at=_dt(), completed_at=_dt())
+        assert len(status["diagnosis"]["summary"]) == _MAX_LEN_DIAGNOSIS_SUMMARY
+        assert len(status["diagnosis"]["rootCause"]) == _MAX_LEN_DIAGNOSIS_ROOT_CAUSE
+
     def test_action_required_false(self) -> None:
         agent = {
             "actionRequired": False,
@@ -218,6 +230,13 @@ class TestSanitizeAnalysisOptions:
         assert len(result) == 1
         assert result[0]["title"] == "t"
 
+    def test_truncates_options_list_to_ten(self) -> None:
+        opts = [{"title": f"opt{i}"} for i in range(11)]
+        result, _errors = _sanitize_analysis_options(opts)
+        assert len(result) == 10
+        assert result[0]["title"] == "opt0"
+        assert result[9]["title"] == "opt9"
+
     def test_plan_without_diagnosis_returns_error(self) -> None:
         opt = {
             "title": "t",
@@ -358,3 +377,64 @@ class TestBuildStatusTokenUsage:
             output_tokens=0,
         )
         assert status["tokenUsage"] == {"inputTokens": 0, "outputTokens": 0}
+
+
+class TestBuildConditionsTimeout:
+    """Agent timeout handling in build_conditions (OLS-4024)."""
+
+    def test_timeout_sets_agent_timeout_reason(self) -> None:
+        """When timed_out=True, reason is AgentTimeout."""
+        started = _dt()
+        completed = datetime(2026, 8, 15, 12, 31, 0, tzinfo=UTC)
+        conds = build_conditions(
+            started_at=started,
+            completed_at=completed,
+            succeeded=False,
+            timed_out=True,
+        )
+        assert conds[1]["reason"] == "AgentTimeout"
+        assert conds[1]["message"] == "Agent invocation timeout"
+
+    def test_timeout_overrides_success_flag(self) -> None:
+        """When timed_out=True, AgentTimeout reason takes precedence over succeeded=True."""
+        started = _dt()
+        completed = datetime(2026, 8, 15, 12, 31, 0, tzinfo=UTC)
+        conds = build_conditions(
+            started_at=started,
+            completed_at=completed,
+            succeeded=True,
+            timed_out=True,
+        )
+        assert conds[1]["reason"] == "AgentTimeout"
+
+    def test_timeout_status_includes_failure_reason_even_if_success_flag_is_wrong(self) -> None:
+        status = build_status(
+            "AnalysisResult",
+            {"success": True, "summary": "timeout summary"},
+            started_at=_dt(),
+            completed_at=_dt(),
+            timed_out=True,
+        )
+
+        assert status["failureReason"] == "timeout summary"
+        assert status["conditions"][1]["reason"] == "AgentTimeout"
+
+    def test_success_when_timed_out_false(self) -> None:
+        """When timed_out=False and succeeded=True, reason is Succeeded."""
+        conds = build_conditions(
+            started_at=_dt(),
+            completed_at=_dt(),
+            succeeded=True,
+            timed_out=False,
+        )
+        assert conds[1]["reason"] == "Succeeded"
+
+    def test_failed_when_timed_out_false(self) -> None:
+        """When timed_out=False and succeeded=False, reason is Failed."""
+        conds = build_conditions(
+            started_at=_dt(),
+            completed_at=_dt(),
+            succeeded=False,
+            timed_out=False,
+        )
+        assert conds[1]["reason"] == "Failed"
