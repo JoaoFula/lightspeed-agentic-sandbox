@@ -22,6 +22,17 @@ Package tree: `AGENTS.md`. Behavioral rules: `what/run-api.md`, `what/provider-c
 - **Result publishing:** `publish_results/publish.py` + `status.py` — Kubernetes client, no `oc` subprocess.
 - **Result inspector [PLANNED: OLS-3928]:** A focused module implements `openshift/ols/.ai/spec/what/tool-result-inspection.md` and exposes `ToolResultSafetyInspectionFailed` to the batch path.
 
+## Provider-egress CA bundle [PLANNED: OLS-3042]
+
+The batch startup/configuration path discovers `.crt` and `.pem` files below
+`/var/run/secrets/lightspeed/tls/`, combines them with the platform/system
+trust store, and exposes one runtime bundle to Python and provider TLS code.
+Provider adapters MUST consume the shared bundle and MUST NOT contain
+operator Secret names, source-specific CA paths, or per-source trust logic.
+The generic TLS values passed by the agentic operator are parsed once at the
+runtime boundary; adapters receive configured TLS behavior through shared
+configuration rather than independent CA arguments.
+
 ## Integration Points
 
 - **Batch entrypoint:** `python -m lightspeed_agentic.batch` (`batch.py`).

@@ -37,6 +37,9 @@ Cross-references: how options are consumed in code → `how/provider-architectur
     | `LIGHTSPEED_AGENTICRUN_STEP` | No | AgenticRun step/phase for this pod (`analysis`, `execution`, …). Mapped to `agenticrun.phase` on bridged OTLP log records. Set by operator with the OTEL endpoint. |
     | `TRACEPARENT` | No | W3C trace context from the operator phase span. When set, links sandbox inference spans as children of the operator trace. When absent, sandbox generates a new trace ID. |
     | `LIGHTSPEED_MCP_SERVERS` | No | JSON array of MCP server configs. See rule 20. When absent, no MCP servers are configured. |
+    | `LIGHTSPEED_TLS_PROFILE` | Yes [PLANNED: OLS-3042] | Resolved OpenShift TLS profile type from the classic-operator handoff. |
+    | `LIGHTSPEED_TLS_MIN_VERSION` | Yes [PLANNED: OLS-3042] | Resolved minimum TLS version from the classic-operator handoff. |
+    | `LIGHTSPEED_TLS_CIPHER_SUITES` | When the resolved profile has an explicit cipher list [PLANNED: OLS-3042] | JSON array of resolved cipher-suite names from the classic-operator handoff. |
 
 2. **Provider configuration mapping.** On startup (in `batch.main()`), the sandbox MUST read the generic env vars from rule 1 and set the SDK-specific env vars required by each provider SDK. The mapping logic:
 
@@ -155,6 +158,16 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 22e. The value MUST NOT change Gemini ADK or OpenAI Agents behavior.
 
+### Provider-egress TLS and CA [PLANNED: OLS-3042]
+
+23. **Stable CA mount root.** The sandbox MUST treat `/var/run/secrets/lightspeed/tls/` as the common read-only root for operator-provided CA sources. It MUST scan regular `.crt` and `.pem` files below this root, including files from the additional CA ConfigMap and integration CA Secrets. When the additional CA reference is absent, no `additional-ca/` source is expected and the system trust store remains the base trust source.
+24. **Generic runtime code.** Sandbox code MUST NOT contain individual OTEL, MCP, RHOKP, or additional-CA Secret names, source-specific CA filenames, or per-source CA selection logic. Those names belong only to the operator handoff and PodSpec mount layers.
+25. **Combined runtime bundle.** At startup, the sandbox MUST combine valid mounted certificates with the platform/system trust store and configure Python and provider/runtime TLS code to use the resulting bundle. It MUST NOT replace or mutate the system trust store or pass individual mounted CA paths to provider clients.
+26. **Certificate failures.** Malformed required certificate material MUST fail sandbox startup or connection configuration with a descriptive error. Files with unrelated extensions are ignored.
+27. **Resolved TLS settings.** The sandbox MUST consume `LIGHTSPEED_TLS_PROFILE`, `LIGHTSPEED_TLS_MIN_VERSION`, and `LIGHTSPEED_TLS_CIPHER_SUITES` passed by the agentic operator. The classic operator is expected to resolve these values even when the user does not configure a profile. If the values are absent, the sandbox preserves existing runtime/provider defaults. It MUST apply supplied values using native runtime/provider behavior and MUST NOT infer OpenShift defaults or translate cipher names.
+28. **Separate Secret classes.** Provider credentials, client certificates/keys, and MCP authentication Secrets are not CA-bundle inputs and remain separate when required by their protocols.
+29. **No per-server trust selection.** Per-MCP-server CA configuration and trust selection are not implemented. OLS-3857 is out of scope.
+
 ## Configuration Surface
 
 | Variable / field | Role |
@@ -183,6 +196,10 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 | `LIGHTSPEED_AGENTICRUN_UID` | AgenticRun UID on bridged OTLP log record attrs (templog). Set by operator with OTEL endpoint. |
 | `LIGHTSPEED_AGENTICRUN_STEP` | AgenticRun step → `agenticrun.phase` on bridged OTLP log records. Set by operator with OTEL endpoint. |
 | `LIGHTSPEED_MCP_SERVERS` | JSON array of MCP server configs with URLs, timeouts, and header sources. Set by operator from `ToolsSpec.mcpServers` and auto-injected defaults. |
+| `LIGHTSPEED_TLS_PROFILE` | Resolved OpenShift TLS profile type from the classic-operator handoff. [PLANNED: OLS-3042] |
+| `LIGHTSPEED_TLS_MIN_VERSION` | Resolved minimum TLS version from the classic-operator handoff. [PLANNED: OLS-3042] |
+| `LIGHTSPEED_TLS_CIPHER_SUITES` | JSON array of resolved cipher suites from the classic-operator handoff. [PLANNED: OLS-3042] |
+| `/var/run/secrets/lightspeed/tls/` | Common read-only root for additional and integration CA files. [PLANNED: OLS-3042] |
 | `LIGHTSPEED_REASONING_CONFIG` | JSON reasoning config from operator. Parsed at startup, passed to adapters via `ProviderQueryOptions`. |
 | `/var/run/secrets/llm-credentials/` | LLM credential files mounted by operator (unconditional). |
 | `/var/run/secrets/kubernetes.io/serviceaccount/token` | Projected SA token for MCP `ServiceAccountToken` header resolution. |
@@ -206,7 +223,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 ## Planned Changes
 
-- TLS termination, mTLS, and network policies for operator-to-sandbox traffic. ~~[PLANNED: OLS-3038–OLS-3043]~~ N/A — no HTTP server.
+- [PLANNED: OLS-3042] Provider-egress TLS runtime bundle and generic TLS parameter handling. OLS-3857 per-MCP-server trust selection remains out of scope.
 - Konflux pipeline and lockfile policy updates as Red Hat platform requirements evolve. [PLANNED: OLS-2894]
 - `Client` header source type resolution when client-passthrough MCP auth flows are implemented.
 - [PLANNED: OLS-3743] Require operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS`; remove the sandbox-owned timeout and turn defaults.
