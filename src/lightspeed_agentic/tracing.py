@@ -154,6 +154,7 @@ class _AgenticRunFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if self._uid:
             setattr(record, _ATTR_AGENTICRUN_UID, self._uid)
+        if self._phase:
             setattr(record, _ATTR_AGENTICRUN_PHASE, self._phase)
         return True
 

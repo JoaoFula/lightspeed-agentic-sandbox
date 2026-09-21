@@ -151,7 +151,7 @@ async def run_agent_query(
     capture_content: bool = False,
     agenticrun_uid: str = "",
     traceparent: str | None = None,
-    step: str = "analysis",
+    step: str = "",
 ) -> AgentResult:
     """Run the provider agent and return structured output for Result CR publishing.
 
@@ -198,8 +198,9 @@ async def run_agent_query(
         "gen_ai.operation.name": "chat",
         "gen_ai.request.model": model,
         "gen_ai.provider.name": otel_provider_name,
-        "agenticrun.phase": step,
     }
+    if step:
+        span_attrs["agenticrun.phase"] = step
     if agenticrun_uid:
         span_attrs["agenticrun.uid"] = agenticrun_uid
     chat_span = tracer.start_span(
