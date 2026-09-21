@@ -2,7 +2,7 @@
 
 Audience: AI agents (Claude). Precision over narrative.
 
-Cross-references: batch agent invocation → `run-api.md`. Env and build → `configuration.md`.
+Cross-references: batch agent invocation → `run-api.md`. Env and build → `configuration.md`. Provider-neutral product trace events → `data-collection.md`.
 
 ## Behavioral Rules
 
@@ -14,9 +14,9 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 4. **Content block stop (`content_block_stop`).** Signals that a content or tool block has completed; used by logging to flush buffered thinking.
 
-5. **Tool call (`tool_call`).** Carries the tool name and a string representation of inputs (length-truncated per internal adapter limits).
+5. **Tool call (`tool_call`).** Carries the tool name and a complete string representation of inputs. Provider adapters MUST NOT length-truncate this value; only EventLogger MAY truncate its developer-log rendering (rules 25 and 40).
 
-6. **Tool result (`tool_result`).** Carries stringified tool output (length-truncated per internal adapter limits).
+6. **Tool result (`tool_result`).** Carries a complete string representation of tool output. Provider adapters MUST NOT length-truncate this value; only EventLogger MAY truncate its developer-log rendering (rules 25 and 40).
 
 7. **Result (`result`).** Terminal event: final text payload (may be JSON or plain text depending on structured-output path), input/output token counts, reasoning token count, and response model metadata.
 
@@ -93,6 +93,24 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
     | Azure Entra ID (OLS-3050) | `client_id` / `tenant_id` / `client_secret` | `azure.identity` `ClientSecretCredential` via `azure_ad_token_provider` (rule 29) |
     | AWS Bedrock (OLS-4092) | `aws_access_key_id` / `aws_secret_access_key` + optional `role_arn` | `botocore` credential-provider chain: with `role_arn` it performs STS assume-role and refreshes the short-lived credentials (see `configuration.md` rule 9b). The Anthropic-on-Bedrock model path is unchanged. |
 
+### Agentic product trace normalization
+
+39. [PLANNED: OLS-3569] Provider adapters MUST expose the complete provider-neutral completion, reasoning, tool call/result, explicit skill load/use, and terminal-result values required by `data-collection.md`. Provider-specific SDK object shapes MUST stop at the adapter boundary and MUST NOT create alternate content-event names.
+
+40. [PLANNED: OLS-3569] Tool input/result and assistant/reasoning values retained for content trace events MUST NOT be length-truncated. The existing EventLogger MAY continue to truncate its developer-log rendering.
+
+41. [PLANNED: OLS-3569] Every adapter's terminal `result` MUST carry the exact final response, requested-model fallback or actual response model, input tokens, output tokens, and reasoning tokens. When an SDK does not expose the actual model or a token category, the adapter MUST use the requested model or zero respectively; it MUST NOT omit the field or invent usage.
+
+42. [PLANNED: OLS-3569] Gemini MUST retain terminal text from non-streamed ADK responses and pass it through the terminal `result`; it MUST NOT leave the final value empty because the text arrived in a non-partial event. Gemini MUST also expose response-model and token metadata under rule 41.
+
+43. [PLANNED: OLS-3569] DeepAgents structured output MUST preserve the first agent pass's ordered completion, reasoning, tool, and skill signals and pass the second tool-free shape result as terminal `result` text. Usage totals MUST include both passes, and response-model fallback follows rule 41.
+
+44. [PLANNED: OLS-3569] OpenAI MUST serialize `result.final_output` as the terminal `result` value and expose model and token metadata under rule 41, including reasoning tokens from output-token details when available.
+
+45. [PLANNED: OLS-3569] Adapters MUST emit skill-loaded and skill-used signals only when their SDK or sandbox integration explicitly exposes those facts. They MUST include identity and all available content or metadata without redaction or truncation and MUST NOT infer skill use from model text or generic tool output.
+
+46. [PLANNED: OLS-3569] Adapters MUST preserve the same tool name and stable call ID across each tool call/result pair and the corresponding operational tool span, retain complete input and output, and normalize result status to `ok` or `error`. When the SDK omits a call ID, the adapter MUST generate one stable ID for the pair.
+
 ### Tool-Result Prompt-Injection Inspection [PLANNED: OLS-3928]
 
  1. **Normative source.** The sandbox MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
@@ -105,7 +123,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
  5. **Local paths.** The interception paths include normal results, tool-generated errors, shell output, MCP output, file reads, and search results. They also include offload previews and references. Each later model-visible artifact read or search result MUST pass through the same middleware.
 
- 6. **Event boundary.** After a pass, the adapter MUST send a payload-free `ToolResultEvent` to `EventLogger` and `AuditLogger`. This event can contain safe metadata and controlled inspection fields. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and emit no result event.
+ 6. **Event boundary.** After a pass, the adapter MUST send the complete normalized `ToolResultEvent` to `AuditLogger` so content trace events retain the full tool result required by rules 39–46. `EventLogger` MAY truncate only its developer-log rendering under rule 40. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and emit no result event.
 
  7. **Disabled behavior.** When `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` is false, the middleware MUST skip inspection calls and inspection-based termination. The main-system safety instruction remains active for every provider.
 
