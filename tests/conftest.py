@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from lightspeed_agentic.types import (
     AgentProvider,
@@ -33,6 +37,33 @@ class MockProvider(AgentProvider):
     async def query(self, _options: ProviderQueryOptions) -> AsyncIterator[ProviderEvent]:
         for event in self._events:
             yield event
+
+
+class _InMemorySpanExporter(SpanExporter):
+    def __init__(self) -> None:
+        self._spans: list[Any] = []
+
+    def export(self, spans: Any) -> SpanExportResult:
+        self._spans.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        pass
+
+    def get_finished_spans(self) -> list[Any]:
+        return list(self._spans)
+
+
+@pytest.fixture
+def span_exporter():
+    exporter = _InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    trace._TRACER_PROVIDER_SET_ONCE._done = False
+    trace.set_tracer_provider(provider)
+    yield exporter
+    trace._TRACER_PROVIDER_SET_ONCE._done = False
+    trace.set_tracer_provider(TracerProvider())
 
 
 @pytest.fixture

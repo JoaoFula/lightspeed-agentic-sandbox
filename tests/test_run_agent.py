@@ -111,6 +111,48 @@ async def test_run_agent_query_accepts_traceparent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_agent_query_stamps_inference_correlation(span_exporter) -> None:
+    await run_agent_query(
+        MockProvider(),
+        prompt="test",
+        system_prompt="You are an AI agent.",
+        output_schema=None,
+        context=None,
+        skills_dir="/workspace",
+        model="test-model",
+        max_turns=200,
+        timeout_seconds=300,
+        agenticrun_uid="run-uid",
+        step="execution",
+    )
+
+    chat_span = next(s for s in span_exporter.get_finished_spans() if s.name == "chat test-model")
+    attrs = dict(chat_span.attributes)
+    assert attrs["agenticrun.uid"] == "run-uid"
+    assert attrs["agenticrun.phase"] == "execution"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_query_does_not_invent_correlation(span_exporter) -> None:
+    await run_agent_query(
+        MockProvider(),
+        prompt="test",
+        system_prompt="You are an AI agent.",
+        output_schema=None,
+        context=None,
+        skills_dir="/workspace",
+        model="test-model",
+        max_turns=200,
+        timeout_seconds=300,
+    )
+
+    chat_span = next(s for s in span_exporter.get_finished_spans() if s.name == "chat test-model")
+    attrs = dict(chat_span.attributes)
+    assert "agenticrun.uid" not in attrs
+    assert "agenticrun.phase" not in attrs
+
+
+@pytest.mark.asyncio
 async def test_run_agent_query_timeout() -> None:
     """Wall-clock timeout yields agent failure with a timed-out summary."""
 

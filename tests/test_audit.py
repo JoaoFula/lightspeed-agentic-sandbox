@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 from lightspeed_agentic.audit import AuditLogger
 from lightspeed_agentic.types import (
@@ -18,33 +15,6 @@ from lightspeed_agentic.types import (
     ToolCallEvent,
     ToolResultEvent,
 )
-
-
-class _InMemorySpanExporter(SpanExporter):
-    def __init__(self) -> None:
-        self._spans: list[Any] = []
-
-    def export(self, spans: Any) -> SpanExportResult:
-        self._spans.extend(spans)
-        return SpanExportResult.SUCCESS
-
-    def get_finished_spans(self) -> list[Any]:
-        return list(self._spans)
-
-    def shutdown(self) -> None:
-        pass
-
-
-@pytest.fixture
-def span_exporter():
-    exporter = _InMemorySpanExporter()
-    tp = TracerProvider()
-    tp.add_span_processor(SimpleSpanProcessor(exporter))
-    trace._TRACER_PROVIDER_SET_ONCE._done = False
-    trace.set_tracer_provider(tp)
-    yield exporter
-    trace._TRACER_PROVIDER_SET_ONCE._done = False
-    trace.set_tracer_provider(TracerProvider())
 
 
 def _make_logger(**kwargs) -> AuditLogger:
@@ -73,6 +43,24 @@ class TestToolSpanNaming:
         assert attrs["gen_ai.tool.call.id"] == "call_1"
         assert attrs["tool.input"] == "ls -la"
         assert attrs["tool.output"] == "done"
+
+    def test_tool_span_has_agenticrun_correlation(self, span_exporter) -> None:
+        al = _make_logger(phase="execution", agenticrun_uid="run-uid")
+        al.process_event(ToolCallEvent(name="bash", input="ls"))
+        al.process_event(ToolResultEvent(output="done"))
+
+        attrs = dict(span_exporter.get_finished_spans()[0].attributes)
+        assert attrs["agenticrun.uid"] == "run-uid"
+        assert attrs["agenticrun.phase"] == "execution"
+
+    def test_tool_span_does_not_invent_correlation(self, span_exporter) -> None:
+        al = _make_logger(phase="", agenticrun_uid="")
+        al.process_event(ToolCallEvent(name="bash", input="ls"))
+        al.process_event(ToolResultEvent(output="done"))
+
+        attrs = dict(span_exporter.get_finished_spans()[0].attributes)
+        assert "agenticrun.uid" not in attrs
+        assert "agenticrun.phase" not in attrs
 
     def test_tool_span_kind_internal(self, span_exporter) -> None:
         al = _make_logger()

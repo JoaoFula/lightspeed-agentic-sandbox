@@ -6,6 +6,8 @@ import json
 import os
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from lightspeed_agentic.batch import BatchInput, InputReadError
 from lightspeed_agentic.config import ResolvedSDK
 from lightspeed_agentic.mcp import MCPConfigError
@@ -44,7 +46,7 @@ class TestBatchMain:
             write_log.assert_called_once()
             exit_mock.assert_called_once_with(1)
 
-    def test_success_publishes_and_exits_zero(self) -> None:
+    def test_success_publishes_and_exits_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
         agent_result = AgentResult(
             output={
                 "success": True,
@@ -56,6 +58,8 @@ class TestBatchMain:
             input_tokens=500,
             output_tokens=200,
         )
+        monkeypatch.setenv("LIGHTSPEED_AGENTICRUN_UID", "run-uid")
+        monkeypatch.setenv("LIGHTSPEED_AGENTICRUN_STEP", "execution")
 
         with (
             patch("lightspeed_agentic.batch.read_batch_inputs", return_value=_INPUTS),
@@ -96,8 +100,12 @@ class TestBatchMain:
             assert publish_kwargs["completed_at"] is not None
             assert publish_kwargs["input_tokens"] == 500
             assert publish_kwargs["output_tokens"] == 200
-            init_tracer.assert_called_once_with(agenticrun_phase="analysis")
-            assert run_query.call_args.kwargs["step"] == "analysis"
+            init_tracer.assert_called_once_with(
+                agenticrun_uid="run-uid",
+                agenticrun_phase="execution",
+            )
+            assert run_query.call_args.kwargs["agenticrun_uid"] == "run-uid"
+            assert run_query.call_args.kwargs["step"] == "execution"
             assert run_query.call_args.kwargs["timeout_seconds"] == 300
             assert run_query.call_args.kwargs["max_turns"] == 200
             exit_mock.assert_not_called()

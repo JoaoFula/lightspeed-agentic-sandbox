@@ -147,6 +147,9 @@ def main() -> None:
         sys.exit(1)
         return
 
+    agenticrun_uid = os.environ.get("LIGHTSPEED_AGENTICRUN_UID", "").strip()
+    agenticrun_phase = os.environ.get("LIGHTSPEED_AGENTICRUN_STEP", "").strip()
+
     target_ns = _pick_namespace(inputs.context)
     logger.info(
         "step=%s query_len=%d target_ns=%s kind=%s",
@@ -170,13 +173,15 @@ def main() -> None:
             return
 
         if otel_runtime_enabled():
-            init_tracer(agenticrun_phase=step)
+            init_tracer(
+                agenticrun_uid=agenticrun_uid,
+                agenticrun_phase=agenticrun_phase,
+            )
             otel_active = True
         provider = create_provider(sdk.name)
         startup_model = resolve_startup_model(sdk.name)
         audit_enabled = os.environ.get("LIGHTSPEED_AUDIT_ENABLED", "").strip().lower() == "true"
         capture_content = _resolve_capture_content(audit_enabled)
-        agenticrun_uid = os.environ.get("LIGHTSPEED_AGENTICRUN_UID", "").strip()
         skills_dir = os.environ.get("LIGHTSPEED_SKILLS_DIR", DEFAULT_SKILLS_DIR)
         model = resolve_router_model(provider.name, startup_model)
 
@@ -208,7 +213,7 @@ def main() -> None:
                 capture_content=capture_content,
                 agenticrun_uid=agenticrun_uid,
                 traceparent=traceparent,
-                step=step,
+                step=agenticrun_phase,
             )
         )
 
