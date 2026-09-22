@@ -7,13 +7,19 @@ from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from lightspeed_agentic.mcp import ResolvedMCPHeader, ResolvedMCPServer
-from lightspeed_agentic.providers.deepagents import TOOL_INPUT_MAX_CHARS, TOOL_OUTPUT_MAX_CHARS
-from lightspeed_agentic.types import (
+from lightspeed_agentic.mcp import (  # type: ignore[import-untyped]
+    ResolvedMCPHeader,
+    ResolvedMCPServer,
+)
+from lightspeed_agentic.providers.deepagents import (  # type: ignore[import-untyped]
+    TOOL_INPUT_MAX_CHARS,
+    TOOL_OUTPUT_MAX_CHARS,
+)
+from lightspeed_agentic.types import (  # type: ignore[import-untyped]
     ContentBlockStopEvent,
     ProviderQueryOptions,
     ResultEvent,
@@ -82,7 +88,7 @@ async def _collect_events(
     options: ProviderQueryOptions,
 ) -> list[Any]:
     events = []
-    async for event in provider.query(options):
+    async for event in provider.query(options):  # nosemgrep
         events.append(event)
     return events
 
@@ -96,7 +102,7 @@ def _deepagents_provider(
 ) -> Iterator[Any]:
     import importlib
 
-    import lightspeed_agentic.providers.deepagents as mod
+    import lightspeed_agentic.providers.deepagents as mod  # type: ignore[import-untyped]
 
     with (
         patch.dict(
@@ -111,6 +117,23 @@ def _deepagents_provider(
     ):
         importlib.reload(mod)
         yield mod.DeepAgentsProvider()
+
+
+@pytest.mark.asyncio
+async def test_close_model_clients_closes_only_initialized_clients() -> None:
+    from lightspeed_agentic.providers.deepagents import _close_model_clients
+
+    sync_client = Mock(spec=["close"])
+    async_client = MagicMock(spec=["aclose"])
+    async_client.aclose = AsyncMock()
+    model = MagicMock()
+    model.__dict__["_client"] = sync_client
+    model.__dict__["_async_client"] = async_client
+
+    await _close_model_clients(model)
+
+    sync_client.close.assert_called_once_with()
+    async_client.aclose.assert_awaited_once_with()
 
 
 class TestResolveModel:
@@ -779,6 +802,7 @@ class TestEventMapping:
         mock_create.assert_called_once()
         create_kwargs = mock_create.call_args[1]
         assert create_kwargs["tools"] == [mock_mcp_tool]
+        assert callable(server_config["test-server"]["httpx_client_factory"])
 
 
 class TestSkillsGating:

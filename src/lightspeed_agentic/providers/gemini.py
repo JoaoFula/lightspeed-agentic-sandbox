@@ -89,6 +89,7 @@ class GeminiProvider(AgentProvider):
     async def query(self, options: ProviderQueryOptions) -> AsyncIterator[ProviderEvent]:
         from google.adk.agents import Agent, RunConfig
         from google.adk.agents.run_config import StreamingMode
+        from google.adk.models import Gemini
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.adk.tools import (  # type: ignore[attr-defined]
@@ -99,6 +100,8 @@ class GeminiProvider(AgentProvider):
         from google.adk.tools.bash_tool import ExecuteBashTool
         from google.adk.tools.tool_confirmation import ToolConfirmation
         from google.genai import types
+
+        from lightspeed_agentic.tls import get_ssl_context
 
         workspace = pathlib.Path(options.cwd)
 
@@ -149,9 +152,17 @@ class GeminiProvider(AgentProvider):
         if options.reasoning_config:
             gen_content_kwargs["thinking_config"] = types.ThinkingConfig(**options.reasoning_config)
 
+        gemini_model = Gemini(
+            model=options.model,
+            client_kwargs={
+                "http_options": types.HttpOptions(
+                    async_client_args={"verify": get_ssl_context()},
+                ),
+            },
+        )
         agent_kwargs: dict[str, Any] = {
             "name": "lightspeed",
-            "model": options.model,
+            "model": gemini_model,
             "instruction": options.system_prompt,
             "tools": tools,
             "after_tool_callback": _trim_tool_response,

@@ -141,7 +141,7 @@ def _set_config_map_job_owner(
 ) -> None:
     """Tie input ConfigMap lifecycle to the batch Job (GC when Job TTL deletes it)."""
     cm = core_api.read_namespaced_config_map(config_map_name, namespace)
-    cm.metadata.owner_references = [
+    cm.metadata.owner_references = [  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
         V1OwnerReference(
             api_version="batch/v1",
             kind="Job",
@@ -239,7 +239,7 @@ def run_batch_query(
                 skill_configmaps=skill_configmaps,
             ),
         )
-        job_uid = created_job.metadata.uid
+        job_uid = created_job.metadata.uid  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
         if job_uid:
             _set_config_map_job_owner(
                 core_api,
@@ -275,7 +275,7 @@ def run_batch_query(
 
     kind = result_template["kind"]
     try:
-        result.result_cr = custom_api.get_namespaced_custom_object(
+        result.result_cr = custom_api.get_namespaced_custom_object(  # pyright: ignore[reportAttributeAccessIssue, reportArgumentType]
             group=CRD_GROUP,
             version=CRD_VERSION,
             namespace=config.namespace,
@@ -290,7 +290,7 @@ def run_batch_query(
         result.latency_seconds = time.monotonic() - start
         return result
 
-    result.body = _body_from_result_cr(result.result_cr)
+    result.body = _body_from_result_cr(result.result_cr)  # pyright: ignore[reportArgumentType]
     if _needs_pod_log_enrichment(result.body):
         result.body = _enrich_body_from_pod_logs(result.body, result.pod_logs)
     result.latency_seconds = time.monotonic() - start
@@ -337,7 +337,7 @@ def _parse_echo_token_from_pod_logs(pod_logs: str) -> str:
     normalized = _normalize_pod_logs(pod_logs)
     matches = _ECHO_TOKEN_SCRIPT_JSON_RE.findall(normalized)
     if matches:
-        return matches[-1]
+        return matches[-1]  # type: ignore[no-any-return]
     # Some providers (e.g. Gemini ADK) omit raw tool stdout from pod logs but include
     # the script token in the final structured agent output line.
     parsed = _parse_provider_output_json(pod_logs)
@@ -484,10 +484,6 @@ def _build_job_spec(
             [
                 {"name": "OTEL_EXPORTER_OTLP_ENDPOINT", "value": config.otel_endpoint},
                 {"name": "OTEL_EXPORTER_OTLP_PROTOCOL", "value": "grpc"},
-                {
-                    "name": "OTEL_EXPORTER_OTLP_CERTIFICATE",
-                    "value": "/var/run/secrets/otel-ca/otel-ca.crt",
-                },
             ]
         )
 
@@ -506,7 +502,11 @@ def _build_job_spec(
     if otel_enabled and config.otel_ca_secret:
         volumes.append({"name": "otel-ca", "secret": {"secretName": config.otel_ca_secret}})
         volume_mounts.append(
-            {"name": "otel-ca", "mountPath": "/var/run/secrets/otel-ca", "readOnly": True}
+            {
+                "name": "otel-ca",
+                "mountPath": "/var/run/secrets/lightspeed/tls/otel-ca",
+                "readOnly": True,
+            }
         )
     init_containers: list[dict[str, Any]] = []
     init_volume_mounts: list[dict[str, Any]] = []
@@ -600,7 +600,7 @@ def _wait_for_job(
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         job = batch_api.read_namespaced_job(job_name, namespace)
-        status = job.status
+        status = job.status  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
         if status and status.succeeded:
             return True, None
         if status and status.failed:
@@ -612,27 +612,27 @@ def _wait_for_job(
 
 def _fetch_job_pod_logs(core_api: CoreV1Api, namespace: str, job_name: str) -> str:
     pods = core_api.list_namespaced_pod(namespace=namespace, label_selector=f"job-name={job_name}")
-    if not pods.items:
+    if not pods.items:  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
         return ""
-    pod_name = pods.items[0].metadata.name
+    pod_name = pods.items[0].metadata.name  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess, reportIndexIssue]
     try:
-        raw = core_api.read_namespaced_pod_log(name=pod_name, namespace=namespace, tail_lines=200)
+        raw = core_api.read_namespaced_pod_log(name=pod_name, namespace=namespace, tail_lines=200)  # pyright: ignore[reportArgumentType]
     except ApiException:
         return ""
-    return _normalize_pod_logs(raw)
+    return _normalize_pod_logs(raw)  # pyright: ignore[reportArgumentType]
 
 
 def _fetch_termination_message(core_api: CoreV1Api, namespace: str, job_name: str) -> str | None:
     pods = core_api.list_namespaced_pod(namespace=namespace, label_selector=f"job-name={job_name}")
-    if not pods.items:
+    if not pods.items:  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess]
         return None
-    statuses = pods.items[0].status.container_statuses or []
+    statuses = pods.items[0].status.container_statuses or []  # pyright: ignore[reportAttributeAccessIssue, reportOptionalMemberAccess, reportIndexIssue]
     if not statuses:
         return None
     terminated = statuses[0].state.terminated
     if terminated is None:
         return None
-    return terminated.message
+    return terminated.message  # type: ignore[no-any-return]
 
 
 def _sanitize_k8s_name(value: str) -> str:

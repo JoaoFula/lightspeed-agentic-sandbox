@@ -260,11 +260,14 @@ class OpenAIProvider(AgentProvider):
         _ensure_openai_init()
 
         if self._client is None:
-            from openai import AsyncOpenAI
+            from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+
+            from lightspeed_agentic.tls import get_ssl_context
 
             self._client = AsyncOpenAI(
                 base_url=os.environ.get("OPENAI_BASE_URL"),
                 api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"),
+                http_client=DefaultAsyncHttpxClient(verify=get_ssl_context()),
             )
 
         from agents import (
