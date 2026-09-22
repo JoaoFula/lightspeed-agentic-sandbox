@@ -210,6 +210,26 @@ def test_build_manifest_skips_e2e_output_dir_outside_temp(
     assert manifest.extra_path_grants == ()
 
 
+@pytest.mark.asyncio
+async def test_openai_model_uses_shared_tls_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shared_context = object()
+    from lightspeed_agentic.providers.openai import OpenAIProvider
+
+    monkeypatch.setattr(OpenAIProvider, "_client", None)
+    monkeypatch.delenv("E2E_OUTPUT_DIR", raising=False)
+    import lightspeed_agentic.tls as tls  # type: ignore[import-untyped]
+
+    monkeypatch.setattr(tls, "get_ssl_context", lambda: shared_context)
+
+    with patch("openai.DefaultAsyncHttpxClient") as http_client:
+        http_client.return_value = MagicMock()
+        await _run_openai_provider(str(tmp_path))
+
+    http_client.assert_called_once_with(verify=shared_context)
+
+
 async def _empty_stream() -> AsyncIterator[None]:
     return
     yield

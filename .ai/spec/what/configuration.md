@@ -9,7 +9,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 1. **Operator env var contract.** The operator sets generic `LIGHTSPEED_*` env vars on the sandbox pod template. The sandbox MUST NOT depend on the operator setting any SDK-specific env vars. The operator sets:
 
     | Env var | Required | Description |
-    |---|---|---|
+    | --- | --- | --- |
     | `LIGHTSPEED_PROVIDER` | Yes | Hosting backend: `anthropic`, `vertex`, `openai`, `azure`, `bedrock` |
     | `LIGHTSPEED_MODEL` | Yes | Model identifier (e.g. `claude-sonnet-4-20250514`) |
     | `LIGHTSPEED_MODEL_PROVIDER` | When provider=`vertex` | Model family on Vertex: `Anthropic`, `Google`, `OpenAI` |
@@ -27,24 +27,23 @@ Cross-references: how options are consumed in code → `how/provider-architectur
     The operator also sets audit, observability, and MCP env vars:
 
     | Env var | Required | Description |
-    |---|---|---|
+    | --- | --- | --- |
     | `LIGHTSPEED_AUDIT_ENABLED` | No | When `"true"`, structured audit event logging is enabled. Default: disabled. |
     | `LIGHTSPEED_CAPTURE_CONTENT` | No | When `"true"`, `gen_ai.completion` and `gen_ai.reasoning_content` are recorded on `gen_ai.choice` span events. When unset, defaults to the same value as `LIGHTSPEED_AUDIT_ENABLED` (content on when audit is on). Set `"false"` to opt out. The operator does not set this env today. [DEFERRED] Separate CRD field for user-controllable opt-in/out planned per parent spec. |
     | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Shared OTLP collector endpoint for span **and** log export. When absent, OTLP export is off (stdout audit JSON still applies when audit is enabled). |
-    | `OTEL_EXPORTER_OTLP_CERTIFICATE` | No | Optional path to CA cert for the collector (set by operator when mTLS/TLS is configured). |
     | `OTEL_EXPORTER_OTLP_PROTOCOL` | No | `grpc` (default) or `http/protobuf`. |
     | `LIGHTSPEED_AGENTICRUN_UID` | No | AgenticRun `metadata.uid` for this sandbox pod. Stamped on bridged OTLP log **record** attributes. Required by collector templog INSERT. Set by operator with the OTEL endpoint. |
     | `LIGHTSPEED_AGENTICRUN_STEP` | No | AgenticRun step/phase for this pod (`analysis`, `execution`, …). Mapped to `agenticrun.phase` on bridged OTLP log records. Set by operator with the OTEL endpoint. |
     | `TRACEPARENT` | No | W3C trace context from the operator phase span. When set, links sandbox inference spans as children of the operator trace. When absent, sandbox generates a new trace ID. |
-    | `LIGHTSPEED_MCP_SERVERS` | No | JSON array of MCP server configs. See rule 20. When absent, no MCP servers are configured. |
-    | `LIGHTSPEED_TLS_PROFILE` | Yes [PLANNED: OLS-3042] | Resolved OpenShift TLS profile type from the classic-operator handoff. |
-    | `LIGHTSPEED_TLS_MIN_VERSION` | Yes [PLANNED: OLS-3042] | Resolved minimum TLS version from the classic-operator handoff. |
-    | `LIGHTSPEED_TLS_CIPHER_SUITES` | When the resolved profile has an explicit cipher list [PLANNED: OLS-3042] | JSON array of resolved cipher-suite names from the classic-operator handoff. |
+    | `LIGHTSPEED_MCP_SERVERS` | No | JSON array of MCP server configs. See rule 20a. When absent, no MCP servers are configured. |
+    | `LIGHTSPEED_TLS_PROFILE` | No | Optional resolved OpenShift TLS profile type from the operator handoff. Runtime defaults apply when unset. |
+    | `LIGHTSPEED_TLS_MIN_VERSION` | No | Optional resolved minimum TLS version from the operator handoff. Runtime defaults apply when unset. |
+    | `LIGHTSPEED_TLS_CIPHER_SUITES` | When the resolved profile has an explicit cipher list | JSON array of resolved cipher-suite names from the operator handoff. |
 
 2. **Provider configuration mapping.** On startup (in `batch.main()`), the sandbox MUST read the generic env vars from rule 1 and set the SDK-specific env vars required by each provider SDK. The mapping logic:
 
     | `LIGHTSPEED_PROVIDER` | `LIGHTSPEED_MODEL_PROVIDER` | SDK | SDK env vars set |
-    |---|---|---|---|
+    | --- | --- | --- | --- |
     | `anthropic` | *(derived)* | `deepagents` | `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` |
     | `vertex` | `anthropic` | `deepagents` | `ANTHROPIC_MODEL`, `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `GOOGLE_APPLICATION_CREDENTIALS`, `ANTHROPIC_BASE_URL` |
     | `vertex` | `google` | `gemini` | `GEMINI_MODEL`, `GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` |
@@ -89,7 +88,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 10a. **Reasoning configuration.** When `LIGHTSPEED_REASONING_CONFIG` is set, the sandbox MUST parse it as a JSON object and make it available to provider adapters via `ProviderQueryOptions.reasoning_config`. When the env var is absent or empty, `reasoning_config` MUST be `None` and adapters MUST use SDK defaults. When the value is present but is not valid JSON or parses to a non-object type (e.g. array, string, number), the sandbox MUST fail at startup with a descriptive error — it MUST NOT silently fall back to `None`. The sandbox MUST NOT validate the object's keys or values — the upstream SDK and model API validate at invocation time. When a run also has structured output (`output-schema` on the batch input), DeepAgents adapter behavior is defined in [provider-contract.md](provider-contract.md) rule 22 (Anthropic thinking vs forced tool choice). This field is aligned with the classic OLS `reasoning_config` model parameter ([OLS-3452]).
 
-11. **OpenAI base URL.** `OPENAI_BASE_URL` overrides the OpenAI client base URL when set. Mapped from `LIGHTSPEED_PROVIDER_URL` by the configuration mapping for `openai` and `vertex`/`OpenAI` providers.
+ 1. **OpenAI base URL.** `OPENAI_BASE_URL` overrides the OpenAI client base URL when set. Mapped from `LIGHTSPEED_PROVIDER_URL` by the configuration mapping for `openai` and `vertex`/`OpenAI` providers.
 
 11a. **OpenAI-compatible endpoints (vLLM, local services, RHOAI, RHEL AI).** ([OLS-3053]) When `OPENAI_BASE_URL` is set to a non-api.openai.com URL (e.g. vLLM, local service, RHOAI/RHEL AI deployment), the OpenAI provider adapts endpoint selection and configuration:
     - **Endpoint selection.** Native OpenAI (api.openai.com or unset) uses `OpenAIResponsesModel` (streaming via `/v1/responses`). Non-native endpoints use `OpenAIChatCompletionsModel` (streaming via `/v1/chat/completions`) to avoid endpoint-specific bugs and ensure compatibility with vLLM and similar strict OpenAI-compatible implementations.
@@ -110,43 +109,43 @@ Cross-references: how options are consumed in code → `how/provider-architectur
         ```
         The credentials secret contains:
         ```
-        OPENAI_API_KEY: <token-or-placeholder>
+OPENAI_API_KEY: <token-or-placeholder>
         OPENAI_BASE_URL: https://<rhoai-vllm-host>/v1
         OPENAI_MODEL: granite-3-8b-instruct  # or other tool-capable model
         ```
         The sandbox resolves these env vars from the secret, detects `OPENAI_BASE_URL` is non-native, and uses `OpenAIChatCompletionsModel` for request/response handling.
 
-12. **Anthropic via Vertex.** When `LIGHTSPEED_PROVIDER=vertex` and `LIGHTSPEED_MODEL_PROVIDER=anthropic`, the configuration mapping resolves to SDK name `deepagents` and sets Vertex env vars for `ChatAnthropicVertex`.
+ 1. **Anthropic via Vertex.** When `LIGHTSPEED_PROVIDER=vertex` and `LIGHTSPEED_MODEL_PROVIDER=anthropic`, the configuration mapping resolves to SDK name `deepagents` and sets Vertex env vars for `ChatAnthropicVertex`.
 
-13. **[PLANNED: OLS-3743] Maximum turns.** `LIGHTSPEED_AGENT_MAX_TURNS` is required, parsed as an integer from 1 through 500, and passed to `ProviderQueryOptions.max_turns`. Missing, out-of-range, or malformed values fail sandbox startup. The operator resolves omitted `Agent.spec.maxTurns` to 200; the sandbox does not maintain a second default.
+ 2. **[PLANNED: OLS-3743] Maximum turns.** `LIGHTSPEED_AGENT_MAX_TURNS` is required, parsed as an integer from 1 through 500, and passed to `ProviderQueryOptions.max_turns`. Missing, out-of-range, or malformed values fail sandbox startup. The operator resolves omitted `Agent.spec.maxTurns` to 200; the sandbox does not maintain a second default.
 
-14. **Process entry.** The container process runs `python -m lightspeed_agentic.batch` under `catatonit` as PID 1. There is no HTTP listener.
+ 3. **Process entry.** The container process runs `python -m lightspeed_agentic.batch` under `catatonit` as PID 1. There is no HTTP listener.
 
-15. **Container filesystem layout.** `/app` is the agent workspace (skills only). Application source lives at `/opt/lightspeed/src/`, outside the agent-visible tree to prevent context pollution. A read-only skills mount path, a writable per-pod workspace path under system temp, and a writable home directory path for the non-root runtime user are provisioned with ownership for that UID. LLM credential files are mounted read-only at `/var/run/secrets/llm-credentials/`.
+ 4. **Container filesystem layout.** `/app` is the agent workspace (skills only). Application source lives at `/opt/lightspeed/src/`, outside the agent-visible tree to prevent context pollution. A read-only skills mount path, a writable per-pod workspace path under system temp, and a writable home directory path for the non-root runtime user are provisioned with ownership for that UID. LLM credential files are mounted read-only at `/var/run/secrets/llm-credentials/`.
 
-16. **Python load path.** Runtime sets process environment so application source under `/opt/lightspeed/src` and installed site-packages are on `PYTHONPATH` as defined in the image.
+ 5. **Python load path.** Runtime sets process environment so application source under `/opt/lightspeed/src` and installed site-packages are on `PYTHONPATH` as defined in the image.
 
-17. **Hermetic / Konflux build inputs.** Release images are built with network isolation after prefetch: per-architecture Python requirements files with hashes and RPM lockfile input. The generic binary artifacts lockfile may be empty when binaries are copied from other image stages (e.g. `oc`/`kubectl` from `ose-cli`). Regeneration of Python/RPM artifacts is via project automation commands (see `how/provider-architecture.md`).
+ 6. **Hermetic / Konflux build inputs.** Release images are built with network isolation after prefetch: per-architecture Python requirements files with hashes and RPM lockfile input. The generic binary artifacts lockfile may be empty when binaries are copied from other image stages (e.g. `oc`/`kubectl` from `ose-cli`). Regeneration of Python/RPM artifacts is via project automation commands (see `how/provider-architecture.md`).
 
-18. **Non-hermetic fallback.** When prefetch directories are absent, the container build recipe may fetch selected binaries from external URLs for developer builds.
+ 7. **Non-hermetic fallback.** When prefetch directories are absent, the container build recipe may fetch selected binaries from external URLs for developer builds.
 
-19. **System packages — minimum expectations.** Runtime image includes Bash, Git, OpenShift CLI (`oc`), Kubernetes CLI (`kubectl`), and supporting OS utilities per the container recipe. Ripgrep is not currently installed in the image.
+ 8. **System packages — minimum expectations.** Runtime image includes Bash, Git, OpenShift CLI (`oc`), Kubernetes CLI (`kubectl`), and supporting OS utilities per the container recipe. Ripgrep is not currently installed in the image.
 
-20. **MCP server configuration.** When `LIGHTSPEED_MCP_SERVERS` is set, the sandbox MUST parse it as a JSON array of MCP server entries. When the value is present but is not valid JSON or parses to a non-array type, the sandbox MUST fail at startup with a descriptive error (sandbox failure path, `run-api.md` rule 23) — it MUST NOT silently continue with no MCP servers. Each entry has the shape `{"name": string, "url": string, "timeout": int | float, "headers": [{"name": string, "source": string, "secretName"?: string}]}`. JSON booleans MUST NOT be accepted as `timeout` (fall back to default). Invalid server entries (wrong type, missing `name`/`url`, non-array `headers`, malformed header objects, unsupported `source` other than `ServiceAccountToken`, `Secret`, or `Client`) MUST fail at startup with a descriptive error — the sandbox MUST NOT skip entries and continue. When `source` is `Secret` and `secretName` is missing, empty, or not a string, the sandbox MUST skip that header (warn) and continue — it MUST NOT reject the entire server entry. Runtime header resolution failures (missing SA token file, empty secret dir, path traversal) MUST skip the header (warn) and continue. The sandbox MUST build SDK-native MCP client configs from this array and pass them into provider adapters via `ProviderQueryOptions.mcp_servers` (see `provider-contract.md`). When the env var is absent or empty, no MCP servers are configured.
+ 9. **MCP server configuration.** When `LIGHTSPEED_MCP_SERVERS` is set, the sandbox MUST parse it as a JSON array of MCP server entries. When the value is present but is not valid JSON or parses to a non-array type, the sandbox MUST fail at startup with a descriptive error (sandbox failure path, `run-api.md` rule 23) — it MUST NOT silently continue with no MCP servers. Each entry has the shape `{"name": string, "url": string, "timeout": int | float, "headers": [{"name": string, "source": string, "secretName"?: string}]}`. JSON booleans MUST NOT be accepted as `timeout` (fall back to default). Invalid server entries (wrong type, missing `name`/`url`, non-array `headers`, malformed header objects, unsupported `source` other than `ServiceAccountToken`, `Secret`, or `Client`) MUST fail at startup with a descriptive error — the sandbox MUST NOT skip entries and continue. When `source` is `Secret` and `secretName` is missing, empty, or not a string, the sandbox MUST skip that header (warn) and continue — it MUST NOT reject the entire server entry. Runtime header resolution failures (missing SA token file, empty secret dir, path traversal) MUST skip the header (warn) and continue. The sandbox MUST build SDK-native MCP client configs from this array and pass them into provider adapters via `ProviderQueryOptions.mcp_servers` (see `provider-contract.md`). When the env var is absent or empty, no MCP servers are configured.
 
 20a. **MCP tool RBAC derivation** [OLS-3680]. When the analysis agent uses MCP tools whose calls require cluster permissions, the RBAC for those calls is derived (per operator-provided analysis instructions) from the tool's `_meta["openshift.io/rbac"]` contract when published by an operator-managed MCP server, and otherwise by expressing the tool step as equivalent `oc` commands (oc-IR) and deriving RBAC from those — consistent with the script-grounded RBAC model. The sandbox enforces nothing itself; derived RBAC is materialized by the operator onto the per-step ServiceAccount before execution. See the workspace-level spec `ols/.ai/spec/what/mcp-tool-rbac.md`.
 
-21. **MCP header resolution.** For each header in an MCP server entry, the sandbox MUST resolve the value based on the `source` field:
+ 1. **MCP header resolution.** For each header in an MCP server entry, the sandbox MUST resolve the value based on the `source` field:
 
     | `source` | Resolution |
-    |---|---|
+    | --- | --- |
     | `ServiceAccountToken` | Read the projected SA token from `/var/run/secrets/kubernetes.io/serviceaccount/token` and format as `Bearer <token>`. |
     | `Secret` | List files under `/var/secrets/mcp/<secretName>/`, sort by name, and read the first regular file. If the directory is missing, empty, unreadable, or `secretName` is invalid, skip the header (warn). Path traversal outside the mount root MUST be rejected. |
     | `Client` | Skip — not resolved by the sandbox. Reserved for future client-passthrough flows. |
 
     Note: A stricter deterministic path (`.../<secretName>/<secretName>`) and reject-on-missing-`secretName` were written into this spec via review-only commit `1508589` without code or a follow-up ticket (orphan promise). Current behavior is first-file as above.
 
-22. **MCP transport.** The sandbox MUST use Streamable HTTP as the MCP transport when connecting to remote MCP servers. SSE transport (deprecated in MCP spec since 2025-03-26) MUST NOT be used for new connections.
+ 2. **MCP transport.** The sandbox MUST use Streamable HTTP as the MCP transport when connecting to remote MCP servers. SSE transport (deprecated in MCP spec since 2025-03-26) MUST NOT be used for new connections.
 
 22a. **Tool-result inspection** [PLANNED: OLS-3928]. Configuration MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`. `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` controls the local DeepAgents middleware.
 
@@ -158,20 +157,20 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 22e. The value MUST NOT change Gemini ADK or OpenAI Agents behavior.
 
-### Provider-egress TLS and CA [PLANNED: OLS-3042]
+### Provider-egress TLS and CA
 
-23. **Stable CA mount root.** The sandbox MUST treat `/var/run/secrets/lightspeed/tls/` as the common read-only root for operator-provided CA sources. It MUST scan regular `.crt` and `.pem` files below this root, including files from the additional CA ConfigMap and integration CA Secrets. When the additional CA reference is absent, no `additional-ca/` source is expected and the system trust store remains the base trust source.
-24. **Generic runtime code.** Sandbox code MUST NOT contain individual OTEL, MCP, RHOKP, or additional-CA Secret names, source-specific CA filenames, or per-source CA selection logic. Those names belong only to the operator handoff and PodSpec mount layers.
-25. **Combined runtime bundle.** At startup, the sandbox MUST combine valid mounted certificates with the platform/system trust store and configure Python and provider/runtime TLS code to use the resulting bundle. It MUST NOT replace or mutate the system trust store or pass individual mounted CA paths to provider clients.
-26. **Certificate failures.** Malformed required certificate material MUST fail sandbox startup or connection configuration with a descriptive error. Files with unrelated extensions are ignored.
-27. **Resolved TLS settings.** The sandbox MUST consume `LIGHTSPEED_TLS_PROFILE`, `LIGHTSPEED_TLS_MIN_VERSION`, and `LIGHTSPEED_TLS_CIPHER_SUITES` passed by the agentic operator. The classic operator is expected to resolve these values even when the user does not configure a profile. If the values are absent, the sandbox preserves existing runtime/provider defaults. It MUST apply supplied values using native runtime/provider behavior and MUST NOT infer OpenShift defaults or translate cipher names.
-28. **Separate Secret classes.** Provider credentials, client certificates/keys, and MCP authentication Secrets are not CA-bundle inputs and remain separate when required by their protocols.
-29. **No per-server trust selection.** Per-MCP-server CA configuration and trust selection are not implemented. OLS-3857 is out of scope.
+ 1. **Stable CA mount root.** The sandbox MUST treat `/var/run/secrets/lightspeed/tls/` as the common read-only root for operator-provided CA sources. It MUST scan regular `.crt` and `.pem` files below this root, including files from the additional CA ConfigMap and integration CA Secrets. When the additional CA reference is absent, no `additional-ca/` source is expected and the system trust store remains the base trust source.
+ 2. **Generic runtime code.** Sandbox code MUST NOT contain individual OTEL, MCP, RHOKP, or additional-CA Secret names, source-specific CA filenames, or per-source CA selection logic. Those names belong only to the operator handoff and PodSpec mount layers.
+ 3. **Combined runtime bundle.** At startup, the sandbox MUST combine valid mounted certificates with the platform/system trust store and configure Python and provider/runtime TLS code to use the resulting bundle. It MUST NOT replace or mutate the system trust store or pass individual mounted CA paths to provider clients.
+ 4. **Certificate failures.** Malformed required certificate material MUST fail sandbox startup or connection configuration with a descriptive error. Files with unrelated extensions are ignored.
+ 5. **Resolved TLS settings.** The sandbox MUST consume `LIGHTSPEED_TLS_PROFILE`, `LIGHTSPEED_TLS_MIN_VERSION`, and `LIGHTSPEED_TLS_CIPHER_SUITES` passed by the agentic operator. The classic operator is expected to resolve these values even when the user does not configure a profile. If the values are absent, the sandbox preserves existing runtime/provider defaults. It MUST apply supplied values using native runtime/provider behavior and MUST NOT infer OpenShift defaults or translate cipher names.
+ 6. **Separate Secret classes.** Provider credentials, client certificates/keys, and MCP authentication Secrets are not CA-bundle inputs and remain separate when required by their protocols.
+ 7. **No per-server trust selection.** Per-MCP-server CA configuration and trust selection are not implemented. OLS-3857 is out of scope.
 
 ## Configuration Surface
 
 | Variable / field | Role |
-|------------------|------|
+| ------------------ | ------ |
 | `LIGHTSPEED_PROVIDER` | Hosting backend from operator (see rule 1). Replaces direct SDK selection. |
 | `LIGHTSPEED_MODEL` | Model identifier from operator (see rule 1). |
 | `LIGHTSPEED_MODEL_PROVIDER` | Model family on Vertex from operator (see rule 1). |
@@ -196,10 +195,10 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 | `LIGHTSPEED_AGENTICRUN_UID` | AgenticRun UID on bridged OTLP log record attrs (templog). Set by operator with OTEL endpoint. |
 | `LIGHTSPEED_AGENTICRUN_STEP` | AgenticRun step → `agenticrun.phase` on bridged OTLP log records. Set by operator with OTEL endpoint. |
 | `LIGHTSPEED_MCP_SERVERS` | JSON array of MCP server configs with URLs, timeouts, and header sources. Set by operator from `ToolsSpec.mcpServers` and auto-injected defaults. |
-| `LIGHTSPEED_TLS_PROFILE` | Resolved OpenShift TLS profile type from the classic-operator handoff. [PLANNED: OLS-3042] |
-| `LIGHTSPEED_TLS_MIN_VERSION` | Resolved minimum TLS version from the classic-operator handoff. [PLANNED: OLS-3042] |
-| `LIGHTSPEED_TLS_CIPHER_SUITES` | JSON array of resolved cipher suites from the classic-operator handoff. [PLANNED: OLS-3042] |
-| `/var/run/secrets/lightspeed/tls/` | Common read-only root for additional and integration CA files. [PLANNED: OLS-3042] |
+| `LIGHTSPEED_TLS_PROFILE` | Resolved OpenShift TLS profile type from the operator handoff. |
+| `LIGHTSPEED_TLS_MIN_VERSION` | Resolved minimum TLS version from the operator handoff. |
+| `LIGHTSPEED_TLS_CIPHER_SUITES` | JSON array of resolved cipher suites from the operator handoff. |
+| `/var/run/secrets/lightspeed/tls/` | Common read-only root for additional and integration CA files. |
 | `LIGHTSPEED_REASONING_CONFIG` | JSON reasoning config from operator. Parsed at startup, passed to adapters via `ProviderQueryOptions`. |
 | `/var/run/secrets/llm-credentials/` | LLM credential files mounted by operator (unconditional). |
 | `/var/run/secrets/kubernetes.io/serviceaccount/token` | Projected SA token for MCP `ServiceAccountToken` header resolution. |
@@ -223,7 +222,7 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
 ## Planned Changes
 
-- [PLANNED: OLS-3042] Provider-egress TLS runtime bundle and generic TLS parameter handling. OLS-3857 per-MCP-server trust selection remains out of scope.
+- OLS-3857 per-MCP-server trust selection remains out of scope.
 - Konflux pipeline and lockfile policy updates as Red Hat platform requirements evolve. [PLANNED: OLS-2894]
 - `Client` header source type resolution when client-passthrough MCP auth flows are implemented.
 - [PLANNED: OLS-3743] Require operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS`; remove the sandbox-owned timeout and turn defaults.

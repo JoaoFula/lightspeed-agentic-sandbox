@@ -342,10 +342,11 @@ class TestGeminiAdapter:
         assert params.url == "http://test:8080/mcp"
         assert params.headers == {"X-Key": "val"}
         assert params.timeout == 45.0
+        assert callable(params.httpx_client_factory)
 
 
 class TestOpenAIAdapter:
-    def test_creates_servers(self):
+    def test_creates_servers(self) -> None:
         servers = [ResolvedMCPServer(name="ocp-mcp", url="https://ocp:8443/mcp")]
         result = to_openai_mcp_servers(servers)
         assert len(result) == 1
@@ -353,8 +354,9 @@ class TestOpenAIAdapter:
 
         assert isinstance(result[0], MCPServerStreamableHttp)
         assert result[0].name == "ocp-mcp"
+        assert "httpx_client_factory" in result[0].params
 
-    def test_passes_headers(self):
+    def test_passes_headers(self) -> None:
         servers = [
             ResolvedMCPServer(
                 name="ext",
@@ -364,3 +366,4 @@ class TestOpenAIAdapter:
         ]
         result = to_openai_mcp_servers(servers)
         assert result[0].params["headers"] == {"Auth": "Bearer x"}
+        assert "httpx_client_factory" in result[0].params

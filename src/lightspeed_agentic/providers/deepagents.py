@@ -6,6 +6,7 @@ native skills loading, and v3 event streaming for event mapping.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
@@ -62,6 +63,8 @@ def _anthropic_backend() -> Literal["vertex", "bedrock", "direct"]:
 
 def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -> Any:
     """Build a LangChain chat model instance based on env vars set by config.py."""
+    from functools import cached_property
+
     thinking = reasoning_config.get("thinking") if reasoning_config else None
     backend = _anthropic_backend()
 
@@ -75,10 +78,32 @@ def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -
         }
         if thinking:
             kwargs["thinking"] = thinking
+        from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+        kwargs["http_client"] = create_http_client()
+        kwargs["async_http_client"] = create_async_http_client()
         return ChatAnthropicVertex(**kwargs)
 
     if backend == "bedrock":
+        # langchain_aws uses these Anthropic Bedrock clients internally, but does not
+        # expose a stable injection point for a custom HTTPX client. Keep this import
+        # aligned with the installed anthropic SDK version.
+        from anthropic.lib.bedrock._client import AnthropicBedrock, AsyncAnthropicBedrock
         from langchain_aws import ChatAnthropicBedrock
+
+        from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+        class TLSChatAnthropicBedrock(ChatAnthropicBedrock):
+            @cached_property
+            def _client(self) -> Any:
+                return AnthropicBedrock(**self._client_params, http_client=create_http_client())
+
+            @cached_property
+            def _async_client(self) -> Any:
+                return AsyncAnthropicBedrock(
+                    **self._client_params,
+                    http_client=create_async_http_client(),
+                )
 
         kwargs = {
             "model": model,
@@ -86,14 +111,46 @@ def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -
         }
         if thinking:
             kwargs["thinking"] = thinking
-        return ChatAnthropicBedrock(**kwargs)
+        if not isinstance(ChatAnthropicBedrock, type):
+            return ChatAnthropicBedrock(**kwargs)
+        return TLSChatAnthropicBedrock(**kwargs)
 
+    from anthropic import Anthropic, AsyncAnthropic
     from langchain_anthropic import ChatAnthropic
+
+    from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+    class TLSChatAnthropic(ChatAnthropic):
+        @cached_property
+        def _client(self) -> Any:
+            return Anthropic(**self._client_params, http_client=create_http_client())
+
+        @cached_property
+        def _async_client(self) -> Any:
+            return AsyncAnthropic(**self._client_params, http_client=create_async_http_client())
 
     kwargs = {"model": model}
     if thinking:
         kwargs["thinking"] = thinking
-    return ChatAnthropic(**kwargs)
+    if not isinstance(ChatAnthropic, type):
+        return ChatAnthropic(**kwargs)
+    return TLSChatAnthropic(**kwargs)
+
+
+async def _close_model_clients(model: Any) -> None:
+    """Close already-created sync and async clients without triggering lazy creation."""
+    clients: list[Any] = []
+    model_state = getattr(model, "__dict__", {})
+    for name in ("_async_client", "async_client", "_client", "client"):
+        if name in model_state and model_state[name] not in clients:
+            clients.append(model_state[name])
+
+    for client in clients:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
 
 def _json_schema_to_pydantic(schema: dict[str, Any], name: str = "OutputModel") -> Any:
@@ -175,7 +232,10 @@ async def _shape_structured_output(
             )
         ),
     ]
-    result = await structured.ainvoke(shape_messages)
+    try:
+        result = await structured.ainvoke(shape_messages)
+    finally:
+        await _close_model_clients(format_model)
     if isinstance(result, dict) and "parsed" in result:
         parsed = result["parsed"]
         in_tok, out_tok = _usage_from_message(result.get("raw"))
@@ -275,6 +335,8 @@ class DeepAgentsProvider(AgentProvider):
         if options.mcp_servers:
             from langchain_mcp_adapters.client import MultiServerMCPClient
 
+            from lightspeed_agentic.tls import create_async_http_client
+
             client = MultiServerMCPClient(
                 {
                     server.name: {  # type: ignore[misc]
@@ -282,6 +344,7 @@ class DeepAgentsProvider(AgentProvider):
                         "url": server.url,
                         "headers": {h.name: h.value for h in server.headers},
                         "timeout": server.timeout,
+                        "httpx_client_factory": create_async_http_client,
                     }
                     for server in options.mcp_servers
                 }
@@ -305,24 +368,27 @@ class DeepAgentsProvider(AgentProvider):
         total_output_tokens = 0
         input_state = {"messages": [{"role": "user", "content": options.prompt}]}
 
-        async for msg, _stream_metadata in cast(Any, agent).astream(
-            input_state,
-            config=stream_config,
-            stream_mode="messages",
-        ):
-            if msg.type in ("ai", "AIMessageChunk"):
-                events, text_delta, in_tok, out_tok = _process_ai_message(msg)
-                for event in events:
-                    yield event
-                result_text += text_delta
-                total_input_tokens += in_tok
-                total_output_tokens += out_tok
+        try:
+            async for msg, _stream_metadata in cast(Any, agent).astream(
+                input_state,
+                config=stream_config,
+                stream_mode="messages",
+            ):
+                if msg.type in ("ai", "AIMessageChunk"):
+                    events, text_delta, in_tok, out_tok = _process_ai_message(msg)
+                    for event in events:
+                        yield event
+                    result_text += text_delta
+                    total_input_tokens += in_tok
+                    total_output_tokens += out_tok
 
-            elif msg.type in ("tool", "ToolMessageChunk"):
-                yield ToolResultEvent(
-                    output=stringify(msg.content)[:TOOL_OUTPUT_MAX_CHARS],
-                    call_id=getattr(msg, "tool_call_id", ""),
-                )
+                elif msg.type in ("tool", "ToolMessageChunk"):
+                    yield ToolResultEvent(
+                        output=stringify(msg.content)[:TOOL_OUTPUT_MAX_CHARS],
+                        call_id=getattr(msg, "tool_call_id", ""),
+                    )
+        finally:
+            await _close_model_clients(chat_model)
 
         if schema_model is not None:
             structured, in_tok, out_tok = await _shape_structured_output(

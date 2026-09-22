@@ -35,7 +35,7 @@ class ResolvedMCPHeader:
 class ResolvedMCPServer:
     name: str
     url: str
-    timeout: int = 60
+    timeout: float = 60
     headers: list[ResolvedMCPHeader] = field(default_factory=list)
 
 
@@ -170,17 +170,18 @@ def _headers_dict(server: ResolvedMCPServer) -> dict[str, str]:
 
 def to_gemini_mcp_toolsets(servers: list[ResolvedMCPServer]) -> list[Any]:
     """Convert to google-adk McpToolset instances."""
-    from google.adk.tools.mcp_tool.mcp_toolset import (  # type: ignore[attr-defined]
-        McpToolset,
-        StreamableHTTPConnectionParams,
-    )
+    from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
+    from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+
+    from lightspeed_agentic.tls import create_async_http_client
 
     toolsets: list[Any] = []
     for s in servers:
         params = StreamableHTTPConnectionParams(
             url=s.url,
             headers=_headers_dict(s) if s.headers else None,
-            timeout=float(s.timeout),
+            timeout=s.timeout,
+            httpx_client_factory=create_async_http_client,
         )
         toolsets.append(McpToolset(connection_params=params))
     return toolsets
@@ -190,9 +191,15 @@ def to_openai_mcp_servers(servers: list[ResolvedMCPServer]) -> list[Any]:
     """Convert to openai-agents MCPServerStreamableHttp instances."""
     from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
 
+    from lightspeed_agentic.tls import create_async_http_client
+
     result: list[Any] = []
     for s in servers:
-        params = MCPServerStreamableHttpParams(url=s.url, timeout=float(s.timeout))
+        params = MCPServerStreamableHttpParams(
+            url=s.url,
+            timeout=s.timeout,
+            httpx_client_factory=create_async_http_client,
+        )
         if s.headers:
             params["headers"] = _headers_dict(s)
         result.append(MCPServerStreamableHttp(params=params, name=s.name))

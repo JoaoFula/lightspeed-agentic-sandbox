@@ -1,5 +1,8 @@
 """Tests for reasoning config parsing and provider adapter wiring."""
 
+# The test doubles intentionally model optional SDKs without complete type stubs.
+# mypy: ignore-errors
+
 from __future__ import annotations
 
 import sys
@@ -30,6 +33,16 @@ class TestGeminiReasoningConfig:
         """When reasoning_config is None, no ThinkingConfig is set."""
         gen_config = await self._run_gemini(reasoning_config=None)
         assert not hasattr(gen_config, "thinking_config") or gen_config.thinking_config is None
+
+    @pytest.mark.asyncio
+    async def test_uses_shared_tls_context_without_run_config_http_options(
+        self,
+    ) -> None:
+        gen_config = await self._run_gemini(reasoning_config=None)
+
+        http_options = gen_config.model_kwargs["client_kwargs"]["http_options"]
+        assert "verify" in http_options["async_client_args"]
+        assert "http_options" not in gen_config.run_config
 
     @pytest.mark.asyncio
     async def test_thinking_config_keys(self) -> None:
@@ -84,8 +97,10 @@ class TestGeminiReasoningConfig:
         mock_types.ToolConfig = FakeToolConfig
         mock_types.Content = FakeContent
         mock_types.Part = FakePart
+        mock_types.HttpOptions = MagicMock(side_effect=lambda **kwargs: kwargs)
 
         mock_agent_cls = MagicMock()
+        mock_gemini_cls = MagicMock()
         mock_runner = MagicMock()
 
         async def _empty_run(**_kwargs):
@@ -111,6 +126,8 @@ class TestGeminiReasoningConfig:
         agents_mod = ModuleType("google.adk.agents")
         agents_mod.Agent = mock_agent_cls  # type: ignore[attr-defined]
         agents_mod.RunConfig = MagicMock()  # type: ignore[attr-defined]
+        models_mod = ModuleType("google.adk.models")
+        models_mod.Gemini = mock_gemini_cls  # type: ignore[attr-defined]
         run_config_mod = ModuleType("google.adk.agents.run_config")
         run_config_mod.StreamingMode = MagicMock(SSE="sse", NONE="none")  # type: ignore[attr-defined]
         runners_mod = ModuleType("google.adk.runners")
@@ -132,6 +149,7 @@ class TestGeminiReasoningConfig:
             "google.adk": adk_mod,
             "google.adk.agents": agents_mod,
             "google.adk.agents.run_config": run_config_mod,
+            "google.adk.models": models_mod,
             "google.adk.runners": runners_mod,
             "google.adk.sessions": sessions_mod,
             "google.adk.tools": tools_mod,
@@ -149,6 +167,8 @@ class TestGeminiReasoningConfig:
             async for _ in provider.query(options):
                 pass
 
+        captured["gen_config"].run_config = agents_mod.RunConfig.call_args.kwargs
+        captured["gen_config"].model_kwargs = mock_gemini_cls.call_args.kwargs
         return captured["gen_config"]
 
 

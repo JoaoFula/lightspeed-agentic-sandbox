@@ -64,6 +64,7 @@ class TestBatchMain:
         with (
             patch("lightspeed_agentic.batch.read_batch_inputs", return_value=_INPUTS),
             patch("lightspeed_agentic.batch.resolve_sdk", return_value=_MOCK_SDK),
+            patch("lightspeed_agentic.batch.configure_tls") as configure_tls,
             patch("lightspeed_agentic.batch.parse_reasoning_config", return_value=None),
             patch("lightspeed_agentic.batch.parse_mcp_servers", return_value=[]),
             patch("lightspeed_agentic.batch.parse_agent_timeout", return_value=300),
@@ -93,6 +94,7 @@ class TestBatchMain:
 
             main()
 
+            configure_tls.assert_called_once_with()
             publish.assert_called_once()
             assert publish.call_args.args[1] == agent_result.output
             publish_kwargs = publish.call_args.kwargs

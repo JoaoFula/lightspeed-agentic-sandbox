@@ -35,6 +35,7 @@ from lightspeed_agentic.publish_results.publish import (
 )
 from lightspeed_agentic.readiness import run_readiness_checks
 from lightspeed_agentic.run_agent import run_agent_query
+from lightspeed_agentic.tls import configure_tls  # pyright: ignore[reportMissingImports]
 from lightspeed_agentic.tracing import init_tracer, otel_runtime_enabled, shutdown_tracer
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ def main() -> None:
 
     otel_active = False
     try:
+        configure_tls()
         sdk = resolve_sdk()
         reasoning_config = parse_reasoning_config()
         mcp_servers = parse_mcp_servers()
