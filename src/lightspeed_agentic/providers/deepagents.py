@@ -132,6 +132,15 @@ def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -
     kwargs = {"model": model}
     if thinking:
         kwargs["thinking"] = thinking
+
+    # Support bearer token auth for vLLM and other Anthropic-compatible endpoints
+    default_headers = {}
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if auth_token:
+        default_headers["Authorization"] = f"Bearer {auth_token}"
+    if default_headers:
+        kwargs["default_headers"] = default_headers
+
     if not isinstance(ChatAnthropic, type):
         return ChatAnthropic(**kwargs)
     return TLSChatAnthropic(**kwargs)

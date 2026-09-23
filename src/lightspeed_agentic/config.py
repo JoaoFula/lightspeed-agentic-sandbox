@@ -48,6 +48,7 @@ def _resolve_anthropic(model: str | None, url: str | None) -> ResolvedSDK:
     return ResolvedSDK(
         "deepagents",
         ("ANTHROPIC_API_KEY",),
+        # ANTHROPIC_AUTH_TOKEN is optional, used for vLLM bearer token auth
     )
 
 
