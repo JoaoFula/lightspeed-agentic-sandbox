@@ -337,39 +337,38 @@ class OpenAIProvider(AgentProvider):
         # Manifest root is cwd's parent (/app) so shell commands can reach workspace
         manifest = _build_manifest(str(Path(options.cwd).parent))
 
-        # Setup MCP servers (gracefully degrade if unavailable)
+        # Setup MCP servers. Once admitted, the full set must remain available.
         mcp_manager = None
         mcp_servers_for_agent: list[Any] = []
         if options.mcp_servers:
+            from agents.mcp import MCPServerManager
+
+            from lightspeed_agentic.mcp import to_openai_mcp_servers
+
+            mcp_servers_list = to_openai_mcp_servers(options.mcp_servers)
+            if not mcp_servers_list:
+                raise RuntimeError("MCP server conversion produced no servers")
+
+            mcp_manager = MCPServerManager(mcp_servers_list)
+            entered = False
             try:
-                from agents.mcp import MCPServerManager
-
-                from lightspeed_agentic.mcp import to_openai_mcp_servers
-
-                mcp_servers_list = to_openai_mcp_servers(options.mcp_servers)
-                if not mcp_servers_list:
-                    logger.warning("MCP servers configured but conversion produced no servers")
-                else:
-                    mcp_manager = MCPServerManager(mcp_servers_list)
-                    await mcp_manager.__aenter__()
-                    # Validate manager initialized properly
-                    if not hasattr(mcp_manager, "active_servers"):
-                        logger.warning("MCPServerManager missing active_servers attribute")
-                        mcp_manager = None
-                    else:
-                        active_servers = mcp_manager.active_servers
-                        active_count = len(active_servers) if active_servers else 0
-                        if active_count == 0:
-                            logger.warning("MCPServerManager initialized but no active servers")
-                        else:
-                            mcp_servers_for_agent = list(active_servers)
-                            logger.debug(f"Initialized {active_count} MCP servers")
-            except Exception as e:
-                logger.warning(
-                    "Failed to initialize MCP servers, continuing without them: "
-                    f"{type(e).__name__}: {e}"
-                )
+                await mcp_manager.__aenter__()
+                entered = True
+                active_servers = getattr(mcp_manager, "active_servers", None) or []
+                active_count = len(active_servers)
+                expected_count = len(mcp_servers_list)
+                if active_count != expected_count:
+                    raise RuntimeError(
+                        f"MCP manager initialized {active_count} of "
+                        f"{expected_count} admitted servers"
+                    )
+                mcp_servers_for_agent = list(active_servers)
+                logger.debug("Initialized %d MCP servers", active_count)
+            except Exception:
+                if entered:
+                    await mcp_manager.__aexit__(None, None, None)
                 mcp_manager = None
+                raise
 
         try:
             if not is_native and mcp_servers_for_agent and function_tools_list is not None:

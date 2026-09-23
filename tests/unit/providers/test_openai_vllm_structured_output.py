@@ -39,6 +39,48 @@ class TestMCPFunctionTools:
         convert.assert_any_call(first_tool, first_server, convert_schemas_to_strict=False)
         convert.assert_any_call(second_tool, second_server, convert_schemas_to_strict=False)
 
+    @pytest.mark.asyncio
+    async def test_non_native_conversion_exposes_only_admitted_tools(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from mcp.types import Tool
+
+        from lightspeed_agentic.mcp import (  # type: ignore[import-untyped]
+            AdmittedMCPProviderServer,
+            to_openai_mcp_servers,
+        )
+
+        [server] = to_openai_mcp_servers(
+            [
+                AdmittedMCPProviderServer(
+                    name="openshift",
+                    url="https://mcp.example/mcp",
+                    allowed_tool_names=("get_pod",),
+                )
+            ]
+        )
+        admitted_tool = Tool(name="get_pod", inputSchema={})
+        rejected_tool = Tool(name="delete_pod", inputSchema={})
+        server.session = MagicMock()
+        server.session.list_tools = AsyncMock(
+            return_value=SimpleNamespace(tools=[admitted_tool, rejected_tool])
+        )
+        converted_tool = object()
+
+        with patch(
+            "agents.mcp.util.MCPUtil.to_function_tool",
+            return_value=converted_tool,
+        ) as convert:
+            result = await _build_mcp_function_tools([server])
+
+        assert result == [converted_tool]
+        convert.assert_called_once_with(
+            admitted_tool,
+            server,
+            convert_schemas_to_strict=False,
+        )
+
 
 class TestNativeOpenAIDetection:
     """Test _is_native_openai() helper."""

@@ -2,6 +2,7 @@
 
 import pytest
 
+from lightspeed_agentic.mcp import AdmittedMCPProviderServer
 from lightspeed_agentic.types import (
     ContentBlockStopEvent,
     ProviderQueryOptions,
@@ -86,3 +87,23 @@ def test_query_options_defaults():
     )
     assert opts.output_schema is None
     assert opts.stream is False
+
+
+def test_query_options_accepts_admitted_provider_servers():
+    server = AdmittedMCPProviderServer(
+        name="openshift",
+        url="https://mcp.example/mcp",
+        allowed_tool_names=("get_pod",),
+    )
+
+    opts = ProviderQueryOptions(
+        prompt="test",
+        system_prompt="system",
+        model="test-model",
+        max_turns=10,
+        allowed_tools=["Bash"],
+        cwd="/workspace",
+        mcp_servers=[server],
+    )
+
+    assert opts.mcp_servers == [server]

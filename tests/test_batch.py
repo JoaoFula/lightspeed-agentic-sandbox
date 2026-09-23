@@ -1,5 +1,7 @@
 """Tests for the batch entrypoint."""
 
+# mypy: disable-error-code="import-untyped"
+
 from __future__ import annotations
 
 import json
@@ -10,7 +12,11 @@ import pytest
 
 from lightspeed_agentic.batch import BatchInput, InputReadError
 from lightspeed_agentic.config import ResolvedSDK
-from lightspeed_agentic.mcp import MCPConfigError
+from lightspeed_agentic.mcp import (
+    AdmittedMCPProviderServer,
+    MCPConfigError,
+    MCPPolicyEntry,
+)
 from lightspeed_agentic.run_agent import AgentResult
 
 _TEMPLATE = {
@@ -31,6 +37,43 @@ _MOCK_SDK = ResolvedSDK("deepagents", ("ANTHROPIC_API_KEY",))
 
 
 class TestBatchMain:
+    def test_analysis_prompt_includes_policy_context(self) -> None:
+        from lightspeed_agentic.batch import _build_system_prompt
+
+        policy = MCPPolicyEntry(
+            server_name="openshift",
+            tool_name="delete_pod",
+            rbac_metadata={"rules": [{"verbs": ["delete"]}]},
+        )
+
+        prompt = _build_system_prompt(
+            "Analyze the incident.", step="analysis", mcp_policies=[policy]
+        )
+
+        assert prompt.startswith("Analyze the incident.\n\n")
+        assert '"server": "openshift"' in prompt
+        assert '"tool": "delete_pod"' in prompt
+        assert '"verbs": ["delete"]' in prompt
+        assert "https://" not in prompt
+
+    def test_non_analysis_prompt_excludes_policy_context(self) -> None:
+        from lightspeed_agentic.batch import _build_system_prompt
+
+        policy = MCPPolicyEntry(
+            server_name="openshift",
+            tool_name="delete_pod",
+            rbac_metadata={"rules": [{"verbs": ["delete"]}]},
+        )
+
+        assert (
+            _build_system_prompt(
+                "Execute the approved action.",
+                step="execution",
+                mcp_policies=[policy],
+            )
+            == "Execute the approved action."
+        )
+
     def test_input_read_failure_writes_termination_log_and_exits(self) -> None:
         with (
             patch(
@@ -66,17 +109,37 @@ class TestBatchMain:
             patch("lightspeed_agentic.batch.resolve_sdk", return_value=_MOCK_SDK),
             patch("lightspeed_agentic.batch.configure_tls") as configure_tls,
             patch("lightspeed_agentic.batch.parse_reasoning_config", return_value=None),
-            patch("lightspeed_agentic.batch.parse_mcp_servers", return_value=[]),
+            patch("lightspeed_agentic.batch.parse_mcp_servers", return_value=["parsed-server"]),
+            patch(
+                "lightspeed_agentic.batch.discover_and_admit_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as discover_mcp,
+            patch(
+                "lightspeed_agentic.batch.split_admitted_mcp_servers",
+                return_value=(
+                    [
+                        AdmittedMCPProviderServer(
+                            name="admitted",
+                            url="https://mcp.example/mcp",
+                            allowed_tool_names=("get_pod",),
+                        )
+                    ],
+                    [
+                        MCPPolicyEntry(
+                            server_name="admitted",
+                            tool_name="delete_pod",
+                            rbac_metadata={"rules": [{"verbs": ["delete"]}]},
+                        )
+                    ],
+                ),
+            ) as split_mcp,
             patch("lightspeed_agentic.batch.parse_agent_timeout", return_value=300),
             patch("lightspeed_agentic.batch.parse_max_turns", return_value=200),
             patch(
                 "lightspeed_agentic.batch.run_readiness_checks",
                 return_value=(True, {"provider_env": "ok"}),
             ),
-            patch("lightspeed_agentic.batch.parse_reasoning_config", return_value=None),
-            patch("lightspeed_agentic.batch.parse_mcp_servers", return_value=[]),
-            patch("lightspeed_agentic.batch.parse_agent_timeout", return_value=300),
-            patch("lightspeed_agentic.batch.parse_max_turns", return_value=200),
             patch("lightspeed_agentic.batch.create_provider") as create_provider,
             patch("lightspeed_agentic.batch.resolve_router_model", return_value="test-model"),
             patch("lightspeed_agentic.batch.run_agent_query", new_callable=AsyncMock) as run_query,
@@ -89,6 +152,14 @@ class TestBatchMain:
             provider = create_provider.return_value
             provider.name = "deepagents"
             run_query.return_value = agent_result
+            order: list[str] = []
+            init_tracer.side_effect = lambda **_kwargs: order.append("tracer")
+
+            async def discover_for_test(_servers: list[str]) -> list[object]:
+                order.append("admission")
+                return []
+
+            discover_mcp.side_effect = discover_for_test
 
             from lightspeed_agentic.batch import main
 
@@ -106,6 +177,20 @@ class TestBatchMain:
                 agenticrun_uid="run-uid",
                 agenticrun_phase="execution",
             )
+            discover_mcp.assert_awaited_once_with(["parsed-server"])
+            assert order == ["tracer", "admission"]
+            split_mcp.assert_called_once_with([])
+            assert run_query.call_args.kwargs["mcp_servers"] == [
+                AdmittedMCPProviderServer(
+                    name="admitted",
+                    url="https://mcp.example/mcp",
+                    allowed_tool_names=("get_pod",),
+                )
+            ]
+            system_prompt = run_query.call_args.kwargs["system_prompt"]
+            assert system_prompt.startswith("You are an AI agent.\n\n")
+            assert '"server": "admitted"' in system_prompt
+            assert '"tool": "delete_pod"' in system_prompt
             assert run_query.call_args.kwargs["agenticrun_uid"] == "run-uid"
             assert run_query.call_args.kwargs["step"] == "execution"
             assert run_query.call_args.kwargs["timeout_seconds"] == 300

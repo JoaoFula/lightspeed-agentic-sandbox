@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from lightspeed_agentic.mcp import ResolvedMCPServer
+    from lightspeed_agentic.mcp import AdmittedMCPProviderServer
 
 DEFAULT_MODEL = "claude-opus-4-6"
 MAX_TOOL_RETURN_CHARS = 4_000
@@ -84,7 +84,7 @@ class ProviderQueryOptions:
     cwd: str
     output_schema: dict[str, Any] | None = None
     stream: bool = False
-    mcp_servers: list[ResolvedMCPServer] = field(default_factory=list)
+    mcp_servers: list[AdmittedMCPProviderServer] = field(default_factory=list)
     reasoning_config: dict[str, Any] | None = None
     tool_output_inspection_enabled: bool = True
 

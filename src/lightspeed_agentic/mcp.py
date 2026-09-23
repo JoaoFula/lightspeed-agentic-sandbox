@@ -70,6 +70,26 @@ class AdmittedMCPServer:
     tools: tuple[AdmittedMCPTool, ...] = ()
 
 
+@dataclass(frozen=True)
+class AdmittedMCPProviderServer:
+    """Provider-facing MCP connection with its admitted tool names."""
+
+    name: str
+    url: str
+    timeout: float = 60
+    headers: tuple[ResolvedMCPHeader, ...] = ()
+    allowed_tool_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class MCPPolicyEntry:
+    """Model-facing policy data for one admitted mutating tool."""
+
+    server_name: str
+    tool_name: str
+    rbac_metadata: dict[str, Any]
+
+
 def _read_secret_value(secret_path: Path) -> str:
     """Read exactly one non-empty value from a Secret mount."""
     if secret_path.is_file():
@@ -223,7 +243,14 @@ def parse_mcp_servers() -> list[ResolvedMCPServer]:
         )
 
     servers: list[ResolvedMCPServer] = []
+    seen_names: set[str] = set()
     for index, entry in enumerate(entries):
+        if isinstance(entry, dict):
+            name = entry.get("name")
+            if isinstance(name, str) and name.strip() and name in seen_names:
+                raise MCPConfigError(f"duplicate MCP server name '{name}' at index {index}")
+            if isinstance(name, str) and name.strip():
+                seen_names.add(name)
         server = _parse_server_entry(entry, index)
         if server is not None:
             servers.append(server)
@@ -270,9 +297,11 @@ def _admit_discovered_tools(
         destructive_hint = bool(metadata.get("destructiveHint"))
         if server.auth_class is MCPAuthClass.KUBERNETES and read_only_hint and destructive_hint:
             logger.info(
-                "Filtered MCP tool server=%s tool=%s reason=contradictory_annotations",
+                "Filtered MCP tool server=%s tool=%s auth_class=%s "
+                "reason=contradictory_annotations",
                 server.name,
                 tool.name,
+                server.auth_class.value,
             )
             continue
         read_only = read_only_hint and not destructive_hint
@@ -281,9 +310,10 @@ def _admit_discovered_tools(
         has_valid_rbac = _has_valid_rbac_metadata(rbac_metadata)
         if server.auth_class is MCPAuthClass.KUBERNETES and not (read_only or has_valid_rbac):
             logger.info(
-                "Filtered MCP tool server=%s tool=%s reason=missing_rbac_metadata",
+                "Filtered MCP tool server=%s tool=%s auth_class=%s reason=missing_rbac_metadata",
                 server.name,
                 tool.name,
+                server.auth_class.value,
             )
             continue
 
@@ -328,14 +358,19 @@ async def discover_and_admit_mcp_server(
         admitted_tools = _admit_discovered_tools(server, tools)
     except Exception as exc:
         logger.warning(
-            "MCP server admission failed server=%s reason=%s",
+            "MCP server admission failed server=%s auth_class=%s reason=%s",
             server.name,
+            server.auth_class.value,
             type(exc).__name__,
         )
         return None
 
     if not admitted_tools:
-        logger.info("Removed MCP server=%s reason=no_admitted_tools", server.name)
+        logger.info(
+            "Removed MCP server=%s auth_class=%s reason=no_admitted_tools",
+            server.name,
+            server.auth_class.value,
+        )
         return None
 
     return AdmittedMCPServer(
@@ -360,12 +395,65 @@ async def discover_and_admit_mcp_servers(
     return [server for server in results if server is not None]
 
 
-def _headers_dict(server: ResolvedMCPServer) -> dict[str, str]:
+def split_admitted_mcp_servers(
+    servers: list[AdmittedMCPServer],
+) -> tuple[list[AdmittedMCPProviderServer], list[MCPPolicyEntry]]:
+    """Project admitted servers into provider and model-policy views."""
+    provider_servers: list[AdmittedMCPProviderServer] = []
+    policies: list[MCPPolicyEntry] = []
+    for server in servers:
+        provider_servers.append(
+            AdmittedMCPProviderServer(
+                name=server.name,
+                url=server.url,
+                timeout=server.timeout,
+                headers=server.headers,
+                allowed_tool_names=tuple(tool.name for tool in server.tools),
+            )
+        )
+        policies.extend(
+            MCPPolicyEntry(
+                server_name=server.name,
+                tool_name=tool.name,
+                rbac_metadata=tool.rbac_metadata,
+            )
+            for tool in server.tools
+            if not tool.read_only and tool.rbac_metadata is not None
+        )
+    return provider_servers, policies
+
+
+MCP_POLICY_CONTEXT_TEMPLATE = """\
+<MCP_MUTATING_TOOL_POLICIES>
+{payload}
+</MCP_MUTATING_TOOL_POLICIES>"""
+
+
+def render_mcp_policy_context(policies: list[MCPPolicyEntry]) -> str:
+    """Render admitted mutating-tool RBAC data for the model system prompt."""
+    if not policies:
+        return ""
+
+    policy_data = [
+        {
+            "server": policy.server_name,
+            "tool": policy.tool_name,
+            "rbac": policy.rbac_metadata,
+        }
+        for policy in policies
+    ]
+    payload = (
+        json.dumps(policy_data, sort_keys=True).replace("<", "\\u003c").replace(">", "\\u003e")
+    )
+    return MCP_POLICY_CONTEXT_TEMPLATE.format(payload=payload)
+
+
+def _headers_dict(server: ResolvedMCPServer | AdmittedMCPProviderServer) -> dict[str, str]:
     """Convert already-resolved headers to the SDK connection format."""
     return {h.name: h.value for h in server.headers}
 
 
-def to_gemini_mcp_toolsets(servers: list[ResolvedMCPServer]) -> list[Any]:
+def to_gemini_mcp_toolsets(servers: list[AdmittedMCPProviderServer]) -> list[Any]:
     """Convert resolved servers to Google ADK MCP toolsets."""
     from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
     from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
@@ -380,11 +468,16 @@ def to_gemini_mcp_toolsets(servers: list[ResolvedMCPServer]) -> list[Any]:
             timeout=s.timeout,
             httpx_client_factory=create_async_http_client,
         )
-        toolsets.append(McpToolset(connection_params=params))
+        toolsets.append(
+            McpToolset(
+                connection_params=params,
+                tool_filter=list(s.allowed_tool_names),
+            )
+        )
     return toolsets
 
 
-def to_openai_mcp_servers(servers: list[ResolvedMCPServer]) -> list[Any]:
+def to_openai_mcp_servers(servers: list[AdmittedMCPProviderServer]) -> list[Any]:
     """Convert resolved servers to OpenAI Agents MCP server instances."""
     from agents.mcp import MCPServerStreamableHttp, MCPServerStreamableHttpParams
 
@@ -399,5 +492,11 @@ def to_openai_mcp_servers(servers: list[ResolvedMCPServer]) -> list[Any]:
         )
         if s.headers:
             params["headers"] = _headers_dict(s)
-        result.append(MCPServerStreamableHttp(params=params, name=s.name))
+        result.append(
+            MCPServerStreamableHttp(
+                params=params,
+                name=s.name,
+                tool_filter={"allowed_tool_names": list(s.allowed_tool_names)},
+            )
+        )
     return result

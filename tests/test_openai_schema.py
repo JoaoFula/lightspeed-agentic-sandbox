@@ -299,13 +299,19 @@ async def test_mcp_servers_are_passed_to_sandbox_agent(
     monkeypatch.delenv("E2E_OUTPUT_DIR", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
-    from lightspeed_agentic.mcp import ResolvedMCPServer  # type: ignore[import-untyped]
+    from lightspeed_agentic.mcp import (  # type: ignore[import-untyped]
+        AdmittedMCPProviderServer,
+    )
 
     mcp_server = object()
     manager = MagicMock(active_servers=[mcp_server])
     manager.__aenter__ = AsyncMock(return_value=manager)
     manager.__aexit__ = AsyncMock(return_value=None)
-    resolved_server = ResolvedMCPServer(name="test", url="http://mcp.test/mcp")
+    admitted_server = AdmittedMCPProviderServer(
+        name="test",
+        url="http://mcp.test/mcp",
+        allowed_tool_names=("get_pod",),
+    )
 
     from lightspeed_agentic.providers.openai import OpenAIProvider
     from lightspeed_agentic.types import ProviderQueryOptions
@@ -325,7 +331,7 @@ async def test_mcp_servers_are_passed_to_sandbox_agent(
             patch("agents.mcp.MCPServerManager", return_value=manager),
             patch(
                 "lightspeed_agentic.mcp.to_openai_mcp_servers",
-                return_value=[resolved_server],
+                return_value=[admitted_server],
             ),
         ):
             options = ProviderQueryOptions(
@@ -335,7 +341,7 @@ async def test_mcp_servers_are_passed_to_sandbox_agent(
                 max_turns=1,
                 allowed_tools=[],
                 cwd=str(tmp_path),
-                mcp_servers=[resolved_server],
+                mcp_servers=[admitted_server],
             )
             provider = OpenAIProvider()
             [event async for event in provider.query(options)]
@@ -344,6 +350,112 @@ async def test_mcp_servers_are_passed_to_sandbox_agent(
     mock_cls = await collect()
     assert mock_cls.call_args.kwargs["mcp_servers"] == [mcp_server]
     assert mcp_server not in mock_cls.call_args.kwargs["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_admitted_mcp_conversion_failure_fails_query(tmp_path: Path) -> None:
+    from lightspeed_agentic.mcp import AdmittedMCPProviderServer
+    from lightspeed_agentic.providers.openai import OpenAIProvider
+    from lightspeed_agentic.types import ProviderQueryOptions
+
+    options = ProviderQueryOptions(
+        prompt="test",
+        system_prompt="system",
+        model="gpt-4.1-mini",
+        max_turns=1,
+        allowed_tools=[],
+        cwd=str(tmp_path),
+        mcp_servers=[
+            AdmittedMCPProviderServer(
+                name="openshift",
+                url="https://mcp.example/mcp",
+                allowed_tool_names=("get_pod",),
+            )
+        ],
+    )
+
+    provider = OpenAIProvider()
+    with (
+        patch("agents.models.openai_responses.OpenAIResponsesModel"),
+        patch("lightspeed_agentic.mcp.to_openai_mcp_servers", return_value=[]),
+        pytest.raises(RuntimeError, match="conversion produced no servers"),
+    ):
+        [event async for event in provider.query(options)]
+
+
+@pytest.mark.asyncio
+async def test_missing_admitted_mcp_active_server_fails_query(tmp_path: Path) -> None:
+    from lightspeed_agentic.mcp import AdmittedMCPProviderServer
+    from lightspeed_agentic.providers.openai import OpenAIProvider
+    from lightspeed_agentic.types import ProviderQueryOptions
+
+    options = ProviderQueryOptions(
+        prompt="test",
+        system_prompt="system",
+        model="gpt-4.1-mini",
+        max_turns=1,
+        allowed_tools=[],
+        cwd=str(tmp_path),
+        mcp_servers=[
+            AdmittedMCPProviderServer(
+                name="openshift",
+                url="https://mcp.example/mcp",
+                allowed_tool_names=("get_pod",),
+            )
+        ],
+    )
+    converted_server = object()
+    manager = MagicMock(active_servers=[])
+    manager.__aenter__ = AsyncMock(return_value=manager)
+    manager.__aexit__ = AsyncMock(return_value=None)
+
+    provider = OpenAIProvider()
+    with (
+        patch("agents.models.openai_responses.OpenAIResponsesModel"),
+        patch("lightspeed_agentic.mcp.to_openai_mcp_servers", return_value=[converted_server]),
+        patch("agents.mcp.MCPServerManager", return_value=manager),
+        pytest.raises(RuntimeError, match="initialized 0 of 1 admitted servers"),
+    ):
+        [event async for event in provider.query(options)]
+
+    manager.__aexit__.assert_awaited_once_with(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_admitted_mcp_manager_initialization_failure_propagates(tmp_path: Path) -> None:
+    from lightspeed_agentic.mcp import AdmittedMCPProviderServer
+    from lightspeed_agentic.providers.openai import OpenAIProvider
+    from lightspeed_agentic.types import ProviderQueryOptions
+
+    options = ProviderQueryOptions(
+        prompt="test",
+        system_prompt="system",
+        model="gpt-4.1-mini",
+        max_turns=1,
+        allowed_tools=[],
+        cwd=str(tmp_path),
+        mcp_servers=[
+            AdmittedMCPProviderServer(
+                name="openshift",
+                url="https://mcp.example/mcp",
+                allowed_tool_names=("get_pod",),
+            )
+        ],
+    )
+    manager = MagicMock()
+    manager.__aenter__ = AsyncMock(side_effect=ConnectionError("unavailable"))
+    manager.__aexit__ = AsyncMock(return_value=None)
+
+    provider = OpenAIProvider()
+    with (
+        patch("agents.models.openai_responses.OpenAIResponsesModel"),
+        patch("lightspeed_agentic.mcp.to_openai_mcp_servers", return_value=[object()]),
+        patch("agents.mcp.MCPServerManager", return_value=manager),
+        pytest.raises(ConnectionError, match="unavailable"),
+    ):
+        [event async for event in provider.query(options)]
+
+    manager.__aexit__.assert_not_awaited()
 
 
 @pytest.mark.asyncio
