@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+import logging
+
+import pytest
+
+from lightspeed_agentic.inspection.errors import InspectionError
+from lightspeed_agentic.inspection.inspector import inspect_tool_result
+
+
+class CharacterCodec:
+    def encode(self, text: str) -> list[int]:
+        return list(text.encode())
+
+    def decode(self, tokens: list[int]) -> str:
+        return bytes(tokens).decode()
+
+
+class FakeSpan:
+    def __init__(self, attributes: dict[str, object]) -> None:
+        self.attributes = dict(attributes)
+        self.status = None
+
+    def __enter__(self) -> FakeSpan:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        pass
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+    def set_status(self, status: object) -> None:
+        self.status = status
+
+
+class FakeTracer:
+    def __init__(self) -> None:
+        self.spans: list[FakeSpan] = []
+
+    def start_as_current_span(self, name: str, *, attributes: dict[str, object]) -> FakeSpan:
+        assert name == "tool_result.inspection"
+        span = FakeSpan(attributes)
+        self.spans.append(span)
+        return span
+
+
+class FakeClient:
+    def __init__(self, response: object) -> None:
+        self.response = response
+
+    async def classify(self, _request: object, *, deadline: float | None = None) -> object:
+        del deadline
+        return self.response
+
+
+async def no_sleep(_: float) -> None:
+    pass
+
+
+@pytest.mark.asyncio
+async def test_benign_span_contains_only_controlled_metadata() -> None:
+    tracer = FakeTracer()
+
+    await inspect_tool_result(
+        FakeClient({"injectionDetected": False, "category": "none"}),
+        tool_name="get_pods",
+        result_type="result",
+        value="SECRET-RESULT-CONTENT",
+        codec=CharacterCodec(),
+        context_window_tokens=640,
+        instruction_tokens=20,
+        output_tokens=20,
+        tracer=tracer,
+        provider="anthropic",
+        model="model-name",
+        sleep=no_sleep,
+    )
+
+    attrs = tracer.spans[0].attributes
+    assert attrs["inspection.outcome"] == "benign"
+    assert attrs["inspection.runtime"] == "deepagents"
+    assert attrs["inspection.result_type"] == "result"
+    assert attrs["llm.provider"] == "anthropic"
+    assert attrs["llm.model"] == "model-name"
+    assert "SECRET-RESULT-CONTENT" not in repr(attrs)
+
+
+@pytest.mark.asyncio
+async def test_malicious_span_has_category_but_no_content(caplog: pytest.LogCaptureFixture) -> None:
+    tracer = FakeTracer()
+    caplog.set_level(logging.WARNING)
+
+    result = await inspect_tool_result(
+        FakeClient({"injectionDetected": True, "category": "unknown"}),
+        tool_name="get_pods",
+        result_type="error",
+        value="DO-NOT-LOG-THIS",
+        codec=CharacterCodec(),
+        context_window_tokens=640,
+        instruction_tokens=20,
+        output_tokens=20,
+        tracer=tracer,
+        sleep=no_sleep,
+    )
+
+    assert result.passed is False
+    assert tracer.spans[0].attributes["inspection.outcome"] == "malicious"
+    assert tracer.spans[0].attributes["inspection.category"] == "unknown"
+    assert "DO-NOT-LOG-THIS" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_classifier_error_telemetry_is_controlled(caplog: pytest.LogCaptureFixture) -> None:
+    tracer = FakeTracer()
+    caplog.set_level(logging.WARNING)
+
+    class FailingClient:
+        async def classify(
+            self, _request: object, *, deadline: float | None = None
+        ) -> object:
+            del deadline
+            raise RuntimeError("CLASSIFIER-RAW-OUTPUT")
+
+    with pytest.raises(InspectionError, match="failed the safety inspection"):
+        await inspect_tool_result(
+            FailingClient(),
+            tool_name="get_pods",
+            result_type="result",
+            value="TOOL-RESULT-SECRET",
+            codec=CharacterCodec(),
+            context_window_tokens=640,
+            instruction_tokens=20,
+            output_tokens=20,
+            tracer=tracer,
+            sleep=no_sleep,
+        )
+
+    assert tracer.spans[0].attributes["inspection.outcome"] == "classifier_error"
+    assert tracer.spans[0].attributes["inspection.failure_type"] == "provider_error"
+    assert "CLASSIFIER-RAW-OUTPUT" not in caplog.text
+    assert "TOOL-RESULT-SECRET" not in caplog.text

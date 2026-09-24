@@ -179,6 +179,24 @@ def resolve_sdk() -> ResolvedSDK:
     return sdk
 
 
+def parse_tool_output_inspection_enabled() -> bool:
+    """Parse the DeepAgents tool-result inspection toggle.
+
+    Inspection is enabled by default. Non-empty values must be an explicit
+    case-insensitive Boolean value.
+    """
+    raw = os.environ.get("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", "").strip()
+    if not raw:
+        return True
+    if raw.lower() == "true":
+        return True
+    if raw.lower() == "false":
+        return False
+    raise ValueError(
+        "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED must be true or false"
+    )
+
+
 def parse_reasoning_config() -> dict[str, Any] | None:
     """Parse LIGHTSPEED_REASONING_CONFIG env var at startup.
 
