@@ -18,6 +18,9 @@ class FakeStructuredModel:
         self.schema = (schema, kwargs)
         return self
 
+    def bind(self, **_: object) -> FakeStructuredModel:
+        return self
+
     async def ainvoke(self, messages: list[Any], **_: Any) -> dict[str, object]:
         self.messages = messages
         return {"injectionDetected": False, "category": "none"}
@@ -105,6 +108,31 @@ async def test_classifier_client_binds_generation_parameters_to_structured_runna
         "temperature": 0,
         "max_tokens": 128,
     }
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_fails_if_generation_parameters_cannot_be_bound() -> None:
+    class UnbindableStructuredRunnable:
+        def bind(self, **_: object) -> object:
+            raise TypeError("binding is unsupported")
+
+        async def ainvoke(self, _messages: list[Any], **_: Any) -> dict[str, object]:
+            return {"injectionDetected": False, "category": "none"}
+
+    class UnbindableModel:
+        def with_structured_output(self, _schema: Any, **_: Any) -> UnbindableStructuredRunnable:
+            return UnbindableStructuredRunnable()
+
+    with pytest.raises(TypeError, match="binding is unsupported"):
+        await LangChainClassifierClient(UnbindableModel()).classify(
+            ClassifierRequest(
+                toolName="get_pods",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
 
 
 @pytest.mark.asyncio

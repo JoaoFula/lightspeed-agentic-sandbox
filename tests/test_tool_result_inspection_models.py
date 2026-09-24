@@ -40,18 +40,14 @@ def test_classifier_request_rejects_boolean_integer_fields(field: str) -> None:
 
 
 def test_classifier_decision_accepts_benign_none() -> None:
-    decision = ClassifierDecision.model_validate(
-        {"injectionDetected": False, "category": "none"}
-    )
+    decision = ClassifierDecision.model_validate({"injectionDetected": False, "category": "none"})
 
     assert decision.injection_detected is False
     assert decision.category == "none"
 
 
 def test_classifier_decision_accepts_malicious_unknown() -> None:
-    decision = ClassifierDecision.model_validate(
-        {"injectionDetected": True, "category": "unknown"}
-    )
+    decision = ClassifierDecision.model_validate({"injectionDetected": True, "category": "unknown"})
 
     assert decision.injection_detected is True
     assert decision.category == "unknown"
@@ -82,29 +78,21 @@ def test_classifier_decision_requires_strict_boolean(value: object) -> None:
     ],
 )
 def test_malicious_categories_are_allowed(category: str) -> None:
-    decision = ClassifierDecision.model_validate(
-        {"injectionDetected": True, "category": category}
-    )
+    decision = ClassifierDecision.model_validate({"injectionDetected": True, "category": category})
 
     assert decision.category in CLASSIFIER_CATEGORIES
 
 
 def test_benign_decision_requires_none_category() -> None:
     with pytest.raises(ValidationError):
-        ClassifierDecision.model_validate(
-            {"injectionDetected": False, "category": "unknown"}
-        )
+        ClassifierDecision.model_validate({"injectionDetected": False, "category": "unknown"})
 
 
 def test_malicious_decision_requires_non_none_category() -> None:
     with pytest.raises(ValidationError):
-        ClassifierDecision.model_validate(
-            {"injectionDetected": True, "category": "none"}
-        )
+        ClassifierDecision.model_validate({"injectionDetected": True, "category": "none"})
 
 
 def test_decision_rejects_unknown_category() -> None:
     with pytest.raises(ValidationError):
-        ClassifierDecision.model_validate(
-            {"injectionDetected": True, "category": "other"}
-        )
+        ClassifierDecision.model_validate({"injectionDetected": True, "category": "other"})

@@ -192,9 +192,7 @@ def parse_tool_output_inspection_enabled() -> bool:
         return True
     if raw.lower() == "false":
         return False
-    raise ValueError(
-        "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED must be true or false"
-    )
+    raise ValueError("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED must be true or false")
 
 
 def parse_reasoning_config() -> dict[str, Any] | None:

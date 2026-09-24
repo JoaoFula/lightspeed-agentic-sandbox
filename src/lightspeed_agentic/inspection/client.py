@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from contextlib import suppress
 from typing import Any, Protocol
 
 from lightspeed_agentic.inspection.models import ClassifierDecision, ClassifierRequest
@@ -45,8 +44,7 @@ class LangChainClassifierClient:
             ClassifierDecision,
             method="json_schema",
         )
-        with suppress(AttributeError, NotImplementedError, TypeError, ValueError):
-            structured = structured.bind(temperature=0, max_tokens=128)
+        structured = structured.bind(temperature=0, max_tokens=128)
         messages = [
             SystemMessage(content=CLASSIFIER_SYSTEM_INSTRUCTION),
             HumanMessage(content=json.dumps(request.model_dump(by_alias=True), ensure_ascii=False)),

@@ -178,3 +178,4 @@ async def test_classifier_error_span_does_not_export_raw_exception(span_exporter
         for value in event.attributes.values()
     )
     assert all(event.name != "exception" for span in spans for event in span.events)
+    assert all("CLASSIFIER-RAW-OUTPUT" not in (span.status.description or "") for span in spans)

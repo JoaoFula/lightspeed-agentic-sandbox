@@ -61,9 +61,11 @@ async def test_inspects_all_chunks_in_source_order() -> None:
     assert [request.chunk_index for request in client.requests] == [0, 1, 2]
     assert all(request.tool_name == "get_pod_logs" for request in client.requests)
     assert all(request.result_type == "result" for request in client.requests)
-    assert all(set(request.model_dump(by_alias=True)) == {
-        "toolName", "resultType", "chunkIndex", "chunkCount", "content"
-    } for request in client.requests)
+    assert all(
+        set(request.model_dump(by_alias=True))
+        == {"toolName", "resultType", "chunkIndex", "chunkCount", "content"}
+        for request in client.requests
+    )
 
 
 @pytest.mark.asyncio
@@ -135,6 +137,9 @@ async def test_classifier_failures_retry_three_total_attempts_with_exact_delays(
     assert len(client.requests) == 3
     assert delays == [0.5, 1.0]
     assert str(error.value) == CLASSIFIER_FAILURE_MESSAGE
+    assert error.value.__cause__ is None
+    assert "provider secret" not in repr(error.value)
+    assert "raw output" not in repr(error.value)
     assert "sensitive" not in str(error.value)
     assert "secret" not in str(error.value)
     assert "raw output" not in str(error.value)
@@ -142,10 +147,12 @@ async def test_classifier_failures_retry_three_total_attempts_with_exact_delays(
 
 @pytest.mark.asyncio
 async def test_invalid_classifier_response_is_retried() -> None:
-    client = FakeClient([
-        {"injectionDetected": "false", "category": "none"},
-        _decision(),
-    ])
+    client = FakeClient(
+        [
+            {"injectionDetected": "false", "category": "none"},
+            _decision(),
+        ]
+    )
     delays: list[float] = []
 
     async def record_sleep(delay: float) -> None:

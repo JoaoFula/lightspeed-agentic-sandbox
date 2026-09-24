@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from opentelemetry.trace import Status, StatusCode
 
@@ -48,7 +48,7 @@ async def _classify_with_retries(
             remaining = None if deadline is None else deadline - monotonic()
             if remaining is not None and remaining <= 0:
                 raise TimeoutError
-            raw_decision = client.classify(request, deadline=deadline)
+            raw_decision: Any = client.classify(request, deadline=deadline)
             if remaining is not None:
                 raw_decision = await asyncio.wait_for(raw_decision, remaining)
             else:
@@ -67,14 +67,14 @@ async def _classify_with_retries(
                     CLASSIFIER_FAILURE_MESSAGE,
                     failure_type=failure_type,
                     attempt_count=attempt + 1,
-                ) from exc
+                ) from None
             delay = (0.5, 1.0)[attempt]
             if deadline is not None and monotonic() + delay >= deadline:
                 raise InspectionError(
                     CLASSIFIER_FAILURE_MESSAGE,
                     failure_type="timeout",
                     attempt_count=attempt + 1,
-                ) from exc
+                ) from None
             await sleep(delay)
             continue
 
@@ -142,7 +142,7 @@ async def inspect_tool_result(
             try:
                 request = ClassifierRequest(
                     toolName=tool_name,
-                    resultType=result_type,
+                    resultType=cast(Literal["result", "error"], result_type),
                     chunkIndex=chunk.chunk_index,
                     chunkCount=chunk.chunk_count,
                     content=chunk.content,
