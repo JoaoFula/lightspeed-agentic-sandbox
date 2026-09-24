@@ -133,7 +133,12 @@ async def inspect_tool_result(
             attributes["llm.provider"] = provider
         if model:
             attributes["llm.model"] = model
-        with tracer.start_as_current_span("tool_result.inspection", attributes=attributes) as span:
+        with tracer.start_as_current_span(
+            "tool_result.inspection",
+            attributes=attributes,
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
             try:
                 request = ClassifierRequest(
                     toolName=tool_name,
@@ -153,6 +158,7 @@ async def inspect_tool_result(
                 span.set_attribute("inspection.attempt_count", exc.attempt_count or 3)
                 span.set_attribute("inspection.outcome", "classifier_error")
                 span.set_attribute("inspection.failure_type", exc.failure_type)
+                span.set_status(Status(StatusCode.ERROR))
                 logger.warning(
                     "tool result safety inspection failed",
                     extra={

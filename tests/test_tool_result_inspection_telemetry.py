@@ -38,7 +38,13 @@ class FakeTracer:
     def __init__(self) -> None:
         self.spans: list[FakeSpan] = []
 
-    def start_as_current_span(self, name: str, *, attributes: dict[str, object]) -> FakeSpan:
+    def start_as_current_span(
+        self,
+        name: str,
+        *,
+        attributes: dict[str, object],
+        **_: object,
+    ) -> FakeSpan:
         assert name == "tool_result.inspection"
         span = FakeSpan(attributes)
         self.spans.append(span)
@@ -116,9 +122,7 @@ async def test_classifier_error_telemetry_is_controlled(caplog: pytest.LogCaptur
     caplog.set_level(logging.WARNING)
 
     class FailingClient:
-        async def classify(
-            self, _request: object, *, deadline: float | None = None
-        ) -> object:
+        async def classify(self, _request: object, *, deadline: float | None = None) -> object:
             del deadline
             raise RuntimeError("CLASSIFIER-RAW-OUTPUT")
 
@@ -140,3 +144,37 @@ async def test_classifier_error_telemetry_is_controlled(caplog: pytest.LogCaptur
     assert tracer.spans[0].attributes["inspection.failure_type"] == "provider_error"
     assert "CLASSIFIER-RAW-OUTPUT" not in caplog.text
     assert "TOOL-RESULT-SECRET" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_classifier_error_span_does_not_export_raw_exception(span_exporter) -> None:
+    class FailingClient:
+        async def classify(self, _request: object, *, deadline: float | None = None) -> object:
+            del deadline
+            raise RuntimeError("CLASSIFIER-RAW-OUTPUT")
+
+    from opentelemetry import trace
+
+    with pytest.raises(InspectionError):
+        await inspect_tool_result(
+            FailingClient(),
+            tool_name="get_pods",
+            result_type="result",
+            value="TOOL-RESULT-SECRET",
+            codec=CharacterCodec(),
+            context_window_tokens=640,
+            instruction_tokens=20,
+            output_tokens=20,
+            tracer=trace.get_tracer("test-inspection"),
+            sleep=no_sleep,
+        )
+
+    spans = span_exporter.get_finished_spans()
+    assert spans
+    assert all(
+        "CLASSIFIER-RAW-OUTPUT" not in str(value)
+        for span in spans
+        for event in span.events
+        for value in event.attributes.values()
+    )
+    assert all(event.name != "exception" for span in spans for event in span.events)

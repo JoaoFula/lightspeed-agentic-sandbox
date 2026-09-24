@@ -23,6 +23,42 @@ class FakeStructuredModel:
         return {"injectionDetected": False, "category": "none"}
 
 
+class BindableStructuredRunnable:
+    def __init__(self) -> None:
+        self.effective_parameters: dict[str, object] = {}
+        self.messages: list[Any] | None = None
+
+    def bind(self, **kwargs: object) -> BindableStructuredRunnable:
+        self.effective_parameters = kwargs
+        return self
+
+    async def ainvoke(self, messages: list[Any], **kwargs: object) -> dict[str, object]:
+        self.messages = messages
+        assert kwargs == {}
+        return {
+            "injectionDetected": self.effective_parameters
+            == {
+                "temperature": 0,
+                "max_tokens": 128,
+            },
+            "category": "unknown" if self.effective_parameters else "none",
+        }
+
+
+class BindableModel:
+    def __init__(self) -> None:
+        self.structured = BindableStructuredRunnable()
+        self.bound_before_structured = False
+
+    def bind(self, **_: object) -> BindableModel:
+        self.bound_before_structured = True
+        return self
+
+    def with_structured_output(self, _schema: Any, **_: Any) -> BindableStructuredRunnable:
+        assert not self.bound_before_structured
+        return self.structured
+
+
 @pytest.mark.asyncio
 async def test_classifier_client_sends_only_dedicated_untrusted_content_messages() -> None:
     model = FakeStructuredModel()
@@ -47,6 +83,28 @@ async def test_classifier_client_sends_only_dedicated_untrusted_content_messages
     assert json.loads(model.messages[1].content) == request.model_dump(by_alias=True)
     assert "history" not in model.messages[1].content
     assert "system prompt" not in model.messages[1].content.lower()
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_binds_generation_parameters_to_structured_runnable() -> None:
+    model = BindableModel()
+    client = LangChainClassifierClient(model)
+
+    decision = await client.classify(
+        ClassifierRequest(
+            toolName="get_pods",
+            resultType="result",
+            chunkIndex=0,
+            chunkCount=1,
+            content="output",
+        )
+    )
+
+    assert decision == ClassifierDecision(injectionDetected=True, category="unknown")
+    assert model.structured.effective_parameters == {
+        "temperature": 0,
+        "max_tokens": 128,
+    }
 
 
 @pytest.mark.asyncio
