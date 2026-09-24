@@ -7,11 +7,21 @@ SOURCE_HASH_FILE=".konflux/requirements.hashes.source.txt"
 WHEEL_HASH_FILE=".konflux/requirements.hashes.wheel.txt"
 WHEEL_PYPI_HASH_FILE=".konflux/requirements.hashes.wheel.pypi.txt"
 
-# Packages in uv.lock runtime that are legitimately absent from hash files.
+# Packages in uv.lock runtime that are legitimately absent from Linux hash files.
 # Keep this list minimal — a growing allowlist is a red flag.
 EXPECTED_MISSING=(
-    # Windows-only — no linux wheels; omitted from Konflux prefetch hash files
+    # Windows-only marker dependencies are omitted from Linux prefetch hashes.
+    colorama
     pywin32
+    tzdata
+    # Emscripten-only marker dependency is omitted from Linux prefetch hashes.
+    httpx2-jsfetch
+    # Dependencies in uv.lock's PyPI graph absent after RHOAI pins select
+    # compatible versions of their parent packages.
+    grpcio-status
+    httpcore2
+    httpx2
+    truststore
 )
 
 log() { echo "==> $*"; }

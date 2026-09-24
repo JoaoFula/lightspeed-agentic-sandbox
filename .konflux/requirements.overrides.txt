@@ -10,3 +10,12 @@ pydantic==2.13.1
 # RHOAI's newest openai wheel is 2.41.1, but openai-agents>=0.18.2 imports
 # PromptCacheOptions (added in openai>=2.45.0). Force the PyPI-resolved pin.
 openai==2.48.0
+
+# Keep PyPI-only packages aligned with uv.lock. The resolver otherwise selects
+# newer releases independently, which makes the generated files fail verification.
+google-adk==2.5.0
+google-cloud-vectorsearch==0.11.1
+langchain-aws==1.6.2
+langchain-mcp-adapters==0.3.0
+openai-agents==0.18.3
+wcmatch==11.0
