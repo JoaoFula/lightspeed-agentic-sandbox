@@ -622,7 +622,7 @@ class TestEventMapping:
         assert "response_format" not in mock_create.call_args[1]
         mock_format_model.with_structured_output.assert_called_once()
         call_kwargs = mock_format_model.with_structured_output.call_args[1]
-        assert call_kwargs["method"] == "json_schema"
+        assert call_kwargs["method"] == "function_calling"
         assert call_kwargs["include_raw"] is True
 
         result_events = [e for e in events if isinstance(e, ResultEvent)]
@@ -631,13 +631,13 @@ class TestEventMapping:
         assert result_events[0].input_tokens == 8
         assert result_events[0].output_tokens == 10
 
-    def test_structured_output_method_json_schema_by_default(
+    def test_structured_output_method_function_calling_for_anthropic(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
         from lightspeed_agentic.providers.deepagents import _structured_output_method
 
-        assert _structured_output_method() == "json_schema"
+        assert _structured_output_method() == "function_calling"
 
     def test_structured_output_method_function_calling_on_bedrock(
         self, monkeypatch: pytest.MonkeyPatch

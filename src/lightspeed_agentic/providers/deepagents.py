@@ -200,8 +200,8 @@ def _usage_from_message(msg: Any) -> tuple[int, int]:
 
 
 def _structured_output_method() -> str:
-    """Bedrock rejects large json_schema grammars; function_calling avoids compilation."""
-    if _anthropic_backend() == "bedrock":
+    """Anthropic rejects large json_schema grammars; function_calling avoids compilation."""
+    if _anthropic_backend() in {"direct", "bedrock"}:
         return "function_calling"
     return "json_schema"
 
