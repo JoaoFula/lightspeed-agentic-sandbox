@@ -24,7 +24,7 @@ FROM ${BUILDER_BASE_IMAGE} AS builder
 USER 0
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ src/
 COPY .konflux/requirements.hashes.*.txt .konflux/requirements.hermetic.txt ./
 
