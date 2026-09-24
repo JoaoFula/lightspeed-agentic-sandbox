@@ -21,6 +21,7 @@ from lightspeed_agentic.config import (
     parse_agent_timeout,
     parse_max_turns,
     parse_reasoning_config,
+    parse_tool_output_inspection_enabled,
     resolve_router_model,
     resolve_sdk,
     resolve_startup_model,
@@ -168,6 +169,7 @@ def main() -> None:
         mcp_servers = parse_mcp_servers()
         agent_timeout_seconds = parse_agent_timeout()
         agent_max_turns = parse_max_turns()
+        tool_output_inspection_enabled = parse_tool_output_inspection_enabled()
         readiness_ok, readiness_checks = run_readiness_checks(sdk)
         if not readiness_ok:
             write_termination_log(_format_readiness_failure(readiness_checks))
@@ -211,6 +213,7 @@ def main() -> None:
                 timeout_seconds=agent_timeout_seconds,
                 mcp_servers=mcp_servers,
                 reasoning_config=reasoning_config,
+                tool_output_inspection_enabled=tool_output_inspection_enabled,
                 audit_enabled=audit_enabled,
                 capture_content=capture_content,
                 agenticrun_uid=agenticrun_uid,

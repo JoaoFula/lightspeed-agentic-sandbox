@@ -147,6 +147,7 @@ async def run_agent_query(
     timeout_seconds: int,
     mcp_servers: list[ResolvedMCPServer] | None = None,
     reasoning_config: dict[str, Any] | None = None,
+    tool_output_inspection_enabled: bool = True,
     audit_enabled: bool = False,
     capture_content: bool = False,
     agenticrun_uid: str = "",
@@ -250,6 +251,7 @@ async def run_agent_query(
                         output_schema=output_schema,
                         mcp_servers=mcp_servers or [],
                         reasoning_config=reasoning_config,
+                        tool_output_inspection_enabled=tool_output_inspection_enabled,
                     )
                 )
                 event_logger = EventLogger("run")
