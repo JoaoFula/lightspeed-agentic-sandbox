@@ -176,6 +176,44 @@ class TestResolveModel:
         call_kwargs = mock_chat_anthropic.call_args[1]
         assert call_kwargs["thinking"] == {"type": "adaptive"}
 
+    def test_direct_anthropic_with_bearer_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "secret-vllm-token")
+
+        mock_chat_anthropic = MagicMock()
+        mock_module = MagicMock()
+        mock_module.ChatAnthropic = mock_chat_anthropic
+
+        with patch.dict(sys.modules, {"langchain_anthropic": mock_module}):
+            from lightspeed_agentic.providers.deepagents import _resolve_model
+
+            _resolve_model("gpt-oss-20b", reasoning_config=None)
+
+        mock_chat_anthropic.assert_called_once()
+        call_kwargs = mock_chat_anthropic.call_args[1]
+        assert call_kwargs["model"] == "gpt-oss-20b"
+        assert call_kwargs["default_headers"] == {"Authorization": "Bearer secret-vllm-token"}
+
+    def test_direct_anthropic_no_bearer_token_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+        monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+
+        mock_chat_anthropic = MagicMock()
+        mock_module = MagicMock()
+        mock_module.ChatAnthropic = mock_chat_anthropic
+
+        with patch.dict(sys.modules, {"langchain_anthropic": mock_module}):
+            from lightspeed_agentic.providers.deepagents import _resolve_model
+
+            _resolve_model("claude-sonnet-4-6", reasoning_config=None)
+
+        call_kwargs = mock_chat_anthropic.call_args[1]
+        assert "default_headers" not in call_kwargs
+
     def test_vertex_anthropic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_CODE_USE_VERTEX", "1")
         monkeypatch.setenv("ANTHROPIC_VERTEX_PROJECT_ID", "my-project")

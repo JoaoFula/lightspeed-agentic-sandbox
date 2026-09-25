@@ -84,6 +84,8 @@ Cross-references: how options are consumed in code → `how/provider-architectur
 
     Token/credential lifecycle is owned by `botocore` (already present via `langchain-aws`); the sandbox adds no AWS credential-handling dependency.
 
+9c. **Anthropic bearer token auth (vLLM, Anthropic-compatible endpoints).** For vLLM or other Anthropic-compatible endpoints that require bearer token auth, set `ANTHROPIC_AUTH_TOKEN`. The adapter sends it as `Authorization: Bearer <token>` via `default_headers`. `ANTHROPIC_API_KEY` must still be set to any non-empty value to pass the sandbox readiness check (rule 9, `check_provider_env`). Otherwise use `ANTHROPIC_API_KEY` alone.
+
 10. **Vertex / Google GenAI.** `GOOGLE_GENAI_USE_VERTEXAI` toggles Vertex behavior for the Gemini adapter (tool composition rules per `provider-contract.md`). Set by the configuration mapping when `LIGHTSPEED_PROVIDER=vertex` and `LIGHTSPEED_MODEL_PROVIDER=Google`.
 
 10a. **Reasoning configuration.** When `LIGHTSPEED_REASONING_CONFIG` is set, the sandbox MUST parse it as a JSON object and make it available to provider adapters via `ProviderQueryOptions.reasoning_config`. When the env var is absent or empty, `reasoning_config` MUST be `None` and adapters MUST use SDK defaults. When the value is present but is not valid JSON or parses to a non-object type (e.g. array, string, number), the sandbox MUST fail at startup with a descriptive error — it MUST NOT silently fall back to `None`. The sandbox MUST NOT validate the object's keys or values — the upstream SDK and model API validate at invocation time. When a run also has structured output (`output-schema` on the batch input), DeepAgents adapter behavior is defined in [provider-contract.md](provider-contract.md) rule 22 (Anthropic thinking vs forced tool choice). This field is aligned with the classic OLS `reasoning_config` model parameter ([OLS-3452]).
@@ -184,6 +186,7 @@ OPENAI_API_KEY: <token-or-placeholder>
 | `LIGHTSPEED_SKILLS_DIR` | Skill root and provider working directory default. |
 | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | Google GenAI credential (from credentials secret envFrom). |
 | `OPENAI_API_KEY` | OpenAI SDK credential (from credentials secret envFrom). |
+| `ANTHROPIC_AUTH_TOKEN` | Bearer token for Anthropic-compatible endpoints (vLLM, custom services). Sent as `Authorization: Bearer <token>` header (rule 9c). `ANTHROPIC_API_KEY` must also be set to any non-empty value. |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API-key credential (from credentials secret envFrom). Used only in API-key mode; omitted in Entra ID mode (rule 9a). |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION` | Internal: Azure client config. Set by configuration mapping (rule 2). |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | Bedrock IAM credential (from credentials secret envFrom or `/var/run/secrets/llm-credentials/`; rule 9b). |
