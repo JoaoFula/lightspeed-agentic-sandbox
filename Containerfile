@@ -24,7 +24,7 @@ FROM ${BUILDER_BASE_IMAGE} AS builder
 USER 0
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ src/
 COPY .konflux/requirements.hashes.*.txt .konflux/requirements.hermetic.txt ./
 
@@ -46,8 +46,7 @@ RUN if [ "${HERMETIC_BUILD}" = "true" ]; then \
             -r requirements.hashes.wheel.pypi.txt; \
     else \
         pip3.12 install --no-cache-dir uv && \
-        uv venv && \
-        uv pip install --python .venv/bin/python --no-cache .[all]; \
+        uv sync --extra all --no-dev --locked; \
     fi
 
 # ---------------------------------------------------------------------------
