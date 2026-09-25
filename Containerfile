@@ -46,7 +46,7 @@ RUN if [ "${HERMETIC_BUILD}" = "true" ]; then \
             -r requirements.hashes.wheel.pypi.txt; \
     else \
         pip3.12 install --no-cache-dir uv && \
-        uv sync --all-extras --no-dev --locked; \
+        uv sync --extra all --no-dev --locked; \
     fi
 
 # ---------------------------------------------------------------------------

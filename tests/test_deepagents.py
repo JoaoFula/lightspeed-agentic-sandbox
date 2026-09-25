@@ -634,6 +634,7 @@ class TestEventMapping:
     def test_structured_output_method_function_calling_for_anthropic(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
         from lightspeed_agentic.providers.deepagents import _structured_output_method
 
