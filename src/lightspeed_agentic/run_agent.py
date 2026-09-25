@@ -15,7 +15,7 @@ from opentelemetry.trace import SpanKind
 
 from lightspeed_agentic.audit import AuditLogger
 from lightspeed_agentic.logging import EventLogger
-from lightspeed_agentic.mcp import ResolvedMCPServer
+from lightspeed_agentic.mcp import AdmittedMCPProviderServer
 from lightspeed_agentic.metrics import operation_duration, token_usage
 from lightspeed_agentic.tools import DEFAULT_ALLOWED_TOOLS
 from lightspeed_agentic.tracing import get_tracer, parse_traceparent
@@ -145,7 +145,7 @@ async def run_agent_query(
     model: str,
     max_turns: int,
     timeout_seconds: int,
-    mcp_servers: list[ResolvedMCPServer] | None = None,
+    mcp_servers: list[AdmittedMCPProviderServer] | None = None,
     reasoning_config: dict[str, Any] | None = None,
     tool_output_inspection_enabled: bool = True,
     audit_enabled: bool = False,

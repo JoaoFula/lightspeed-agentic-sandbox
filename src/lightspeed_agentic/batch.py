@@ -27,7 +27,14 @@ from lightspeed_agentic.config import (
     resolve_startup_model,
 )
 from lightspeed_agentic.factory import create_provider
-from lightspeed_agentic.mcp import MCPConfigError, parse_mcp_servers
+from lightspeed_agentic.mcp import (
+    MCPConfigError,
+    MCPPolicyEntry,
+    discover_and_admit_mcp_servers,
+    parse_mcp_servers,
+    render_mcp_policy_context,
+    split_admitted_mcp_servers,
+)
 from lightspeed_agentic.publish_results.publish import (
     PublishError,
     publish_agent_result,
@@ -182,6 +189,9 @@ def main() -> None:
                 agenticrun_phase=agenticrun_phase,
             )
             otel_active = True
+
+        admitted_mcp_servers = asyncio.run(discover_and_admit_mcp_servers(mcp_servers))
+        provider_mcp_servers, mcp_policies = split_admitted_mcp_servers(admitted_mcp_servers)
         provider = create_provider(sdk.name)
         startup_model = resolve_startup_model(sdk.name)
         audit_enabled = os.environ.get("LIGHTSPEED_AUDIT_ENABLED", "").strip().lower() == "true"
@@ -197,7 +207,11 @@ def main() -> None:
             capture_content,
         )
 
-        system_prompt = inputs.system_prompt or DEFAULT_SYSTEM_PROMPT
+        system_prompt = _build_system_prompt(
+            inputs.system_prompt or DEFAULT_SYSTEM_PROMPT,
+            step=step,
+            mcp_policies=mcp_policies,
+        )
         traceparent = _resolve_traceparent()
         started_at = datetime.now(UTC)
         agent_result = asyncio.run(
@@ -211,7 +225,7 @@ def main() -> None:
                 model=model,
                 max_turns=agent_max_turns,
                 timeout_seconds=agent_timeout_seconds,
-                mcp_servers=mcp_servers,
+                mcp_servers=provider_mcp_servers,
                 reasoning_config=reasoning_config,
                 tool_output_inspection_enabled=tool_output_inspection_enabled,
                 audit_enabled=audit_enabled,
@@ -253,6 +267,21 @@ def main() -> None:
     finally:
         if otel_active:
             shutdown_tracer()
+
+
+def _build_system_prompt(
+    base_prompt: str,
+    *,
+    step: str,
+    mcp_policies: list[MCPPolicyEntry],
+) -> str:
+    """Add admitted MCP policy guidance only to the analysis prompt."""
+    if step != "analysis":
+        return base_prompt
+    policy_context = render_mcp_policy_context(mcp_policies)
+    if not policy_context:
+        return base_prompt
+    return f"{base_prompt}\n\n{policy_context}"
 
 
 def _format_readiness_failure(checks: dict[str, str]) -> str:

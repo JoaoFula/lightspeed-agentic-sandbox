@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 from lightspeed_agentic.mcp import (  # type: ignore[import-untyped]
+    AdmittedMCPProviderServer,
     ResolvedMCPHeader,
-    ResolvedMCPServer,
 )
 from lightspeed_agentic.providers.deepagents import (  # type: ignore[import-untyped]
     TOOL_INPUT_MAX_CHARS,
@@ -813,16 +813,20 @@ class TestEventMapping:
         mock_agent = MagicMock()
         mock_agent.astream = mock_astream
         mock_create = MagicMock(return_value=mock_agent)
-        mock_mcp_tool = MagicMock()
+        allowed_tool = MagicMock(name="allowed_tool")
+        allowed_tool.name = "get_pod"
+        rejected_tool = MagicMock(name="rejected_tool")
+        rejected_tool.name = "delete_pod"
         mock_mcp_client = MagicMock()
-        mock_mcp_client.get_tools = AsyncMock(return_value=[mock_mcp_tool])
+        mock_mcp_client.get_tools = AsyncMock(return_value=[allowed_tool, rejected_tool])
         mock_mcp_client_cls = MagicMock(return_value=mock_mcp_client)
 
-        mcp_server = ResolvedMCPServer(
+        mcp_server = AdmittedMCPProviderServer(
             name="test-server",
             url="http://mcp.example.com",
             timeout=30,
-            headers=[ResolvedMCPHeader(name="Authorization", value="Bearer token")],
+            headers=(ResolvedMCPHeader(name="Authorization", value="Bearer token"),),
+            allowed_tool_names=("get_pod",),
         )
 
         with _deepagents_provider(
@@ -840,7 +844,8 @@ class TestEventMapping:
         mock_mcp_client.get_tools.assert_awaited_once()
         mock_create.assert_called_once()
         create_kwargs = mock_create.call_args[1]
-        assert create_kwargs["tools"] == [mock_mcp_tool]
+        assert create_kwargs["tools"] == [allowed_tool]
+        mock_mcp_client.get_tools.assert_awaited_once_with(server_name="test-server")
         assert callable(server_config["test-server"]["httpx_client_factory"])
 
 

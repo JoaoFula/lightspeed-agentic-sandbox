@@ -358,7 +358,10 @@ class DeepAgentsProvider(AgentProvider):
                     for server in options.mcp_servers
                 }
             )
-            mcp_tools = await client.get_tools()
+            for server in options.mcp_servers:
+                allowed_tool_names = set(server.allowed_tool_names)
+                server_tools = await client.get_tools(server_name=server.name)
+                mcp_tools.extend(tool for tool in server_tools if tool.name in allowed_tool_names)
 
         if mcp_tools:
             agent_kwargs["tools"] = mcp_tools
