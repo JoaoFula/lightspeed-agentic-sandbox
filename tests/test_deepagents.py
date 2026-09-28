@@ -489,6 +489,89 @@ class TestEventMapping:
         assert len(tool_results) == 1
         assert "file1.py" in tool_results[0].output
 
+    @pytest.mark.parametrize("has_terminal_marker", [True, False])
+    @pytest.mark.asyncio
+    async def test_streamed_tool_call_chunks_are_emitted_once_with_complete_correlation(
+        self, monkeypatch: pytest.MonkeyPatch, span_exporter, has_terminal_marker: bool
+    ) -> None:
+        """Partial tool-call chunks become one call event paired to their result span."""
+        import langchain_core
+        import langchain_core.messages
+        from langchain_core.messages import AIMessageChunk, ToolMessage
+        from opentelemetry.trace import StatusCode
+
+        from lightspeed_agentic.audit import AuditLogger
+
+        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+
+        chunks = [
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[{"name": "execute", "args": "", "id": "call-1", "index": 0}],
+            ),
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[
+                    {"name": None, "args": '{"command": "kubectl ', "id": None, "index": 0}
+                ],
+            ),
+            AIMessageChunk(
+                content="",
+                tool_call_chunks=[{"name": None, "args": 'get pods"}', "id": None, "index": 0}],
+            ),
+        ]
+        if has_terminal_marker:
+            chunks.append(AIMessageChunk(content="", chunk_position="last"))
+        tool_result = ToolMessage(content="pod-a", tool_call_id="call-1", name="execute")
+
+        async def mock_astream(
+            *_args: Any, **_kwargs: Any
+        ) -> AsyncIterator[tuple[Any, dict[str, Any]]]:
+            for chunk in chunks:
+                yield chunk, {"langgraph_node": "agent"}
+            yield tool_result, {"langgraph_node": "tools"}
+
+        mock_agent = MagicMock()
+        mock_agent.astream = mock_astream
+        with (
+            _deepagents_provider(MagicMock(return_value=mock_agent), MagicMock()) as provider,
+            patch.dict(
+                sys.modules,
+                {
+                    "langchain_core": langchain_core,
+                    "langchain_core.messages": langchain_core.messages,
+                },
+            ),
+        ):
+            events = await _collect_events(provider, _base_options())
+
+        tool_calls = [event for event in events if isinstance(event, ToolCallEvent)]
+        tool_results = [event for event in events if isinstance(event, ToolResultEvent)]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "execute"
+        assert tool_calls[0].input == '{"command": "kubectl get pods"}'
+        assert tool_calls[0].call_id == "call-1"
+        assert len(tool_results) == 1
+        assert tool_results[0].call_id == "call-1"
+
+        audit = AuditLogger(phase="execution", model="test-model", provider="deepagents")
+        for event in events:
+            audit.process_event(event)
+        audit.complete(success=True, input_tokens=0, output_tokens=0)
+
+        tool_spans = [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.name.startswith("execute_tool")
+        ]
+        assert len(tool_spans) == 1
+        assert tool_spans[0].name == "execute_tool execute"
+        assert dict(tool_spans[0].attributes)["gen_ai.tool.call.id"] == "call-1"
+        assert dict(tool_spans[0].attributes)["tool.input"] == '{"command": "kubectl get pods"}'
+        assert dict(tool_spans[0].attributes)["tool.output"] == "pod-a"
+        assert tool_spans[0].status.status_code == StatusCode.OK
+
     @pytest.mark.asyncio
     async def test_tool_io_truncation_at_boundary(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Tool call input and tool result output are truncated at max char limits."""

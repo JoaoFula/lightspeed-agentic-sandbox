@@ -252,23 +252,28 @@ async def _shape_structured_output(
     return result, 0, 0
 
 
+def _tool_call_events(msg: Any) -> list[ProviderEvent]:
+    """Map complete parsed tool calls to provider events."""
+    return [
+        ToolCallEvent(
+            name=tc.get("name", ""),
+            input=json.dumps(tc.get("args", {}))[:TOOL_INPUT_MAX_CHARS],
+            call_id=tc.get("id", ""),
+        )
+        for tc in msg.tool_calls or []
+    ]
+
+
 def _process_ai_message(
     msg: Any,
+    *,
+    include_tool_calls: bool = True,
 ) -> tuple[list[ProviderEvent], str, int, int]:
     """Map one AIMessage chunk to provider events and token deltas."""
-    events: list[ProviderEvent] = []
+    events: list[ProviderEvent] = _tool_call_events(msg) if include_tool_calls else []
     text_delta = ""
     input_tokens = 0
     output_tokens = 0
-
-    for tc in msg.tool_calls or []:
-        events.append(
-            ToolCallEvent(
-                name=tc.get("name", ""),
-                input=json.dumps(tc.get("args", {}))[:TOOL_INPUT_MAX_CHARS],
-                call_id=tc.get("id", ""),
-            )
-        )
 
     for block in getattr(msg, "content_blocks", []):
         btype = block["type"] if isinstance(block, dict) else getattr(block, "type", "")
@@ -378,7 +383,16 @@ class DeepAgentsProvider(AgentProvider):
         result_text = ""
         total_input_tokens = 0
         total_output_tokens = 0
+        pending_tool_call_chunk: Any | None = None
         input_state = {"messages": [{"role": "user", "content": options.prompt}]}
+
+        def flush_pending_tool_calls() -> list[ProviderEvent]:
+            nonlocal pending_tool_call_chunk
+            if pending_tool_call_chunk is None:
+                return []
+            events = _tool_call_events(pending_tool_call_chunk)
+            pending_tool_call_chunk = None
+            return events
 
         try:
             async for msg, _stream_metadata in cast(Any, agent).astream(
@@ -387,7 +401,37 @@ class DeepAgentsProvider(AgentProvider):
                 stream_mode="messages",
             ):
                 if msg.type in ("ai", "AIMessageChunk"):
-                    events, text_delta, in_tok, out_tok = _process_ai_message(msg)
+                    include_tool_calls = msg.type != "AIMessageChunk"
+                    if msg.type == "AIMessageChunk":
+                        is_last_chunk = getattr(msg, "chunk_position", None) == "last"
+                        tool_call_chunks = getattr(msg, "tool_call_chunks", []) or []
+                        if tool_call_chunks or (
+                            pending_tool_call_chunk is not None and is_last_chunk
+                        ):
+                            current_tool_call_chunk = type(msg)(
+                                content="",
+                                tool_call_chunks=tool_call_chunks,
+                                chunk_position="last" if is_last_chunk else None,
+                            )
+                            pending_tool_call_chunk = (
+                                current_tool_call_chunk
+                                if pending_tool_call_chunk is None
+                                else pending_tool_call_chunk + current_tool_call_chunk
+                            )
+                        if is_last_chunk:
+                            for event in flush_pending_tool_calls():
+                                yield event
+                    elif pending_tool_call_chunk is not None:
+                        if getattr(msg, "tool_calls", None):
+                            pending_tool_call_chunk = None
+                        else:
+                            for event in flush_pending_tool_calls():
+                                yield event
+
+                    events, text_delta, in_tok, out_tok = _process_ai_message(
+                        msg,
+                        include_tool_calls=include_tool_calls,
+                    )
                     for event in events:
                         yield event
                     result_text += text_delta
@@ -395,10 +439,14 @@ class DeepAgentsProvider(AgentProvider):
                     total_output_tokens += out_tok
 
                 elif msg.type in ("tool", "ToolMessageChunk"):
+                    for event in flush_pending_tool_calls():
+                        yield event
                     yield ToolResultEvent(
                         output=stringify(msg.content)[:TOOL_OUTPUT_MAX_CHARS],
                         call_id=getattr(msg, "tool_call_id", ""),
                     )
+            for event in flush_pending_tool_calls():
+                yield event
         finally:
             await _close_model_clients(chat_model)
 
