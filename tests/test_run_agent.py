@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import ToolMessage
 
+from lightspeed_agentic.inspection.errors import ToolResultSafetyInspectionFailed
+from lightspeed_agentic.inspection.middleware import ToolResultInspectionMiddleware
 from lightspeed_agentic.run_agent import ContextFormatError, format_context_prefix, run_agent_query
 from lightspeed_agentic.types import (
     ProviderEvent,
@@ -153,6 +158,61 @@ async def test_run_agent_query_does_not_invent_correlation(span_exporter) -> Non
 
 
 @pytest.mark.asyncio
+async def test_run_agent_query_re_raises_tool_result_safety_failure() -> None:
+    class SafetyFailureProvider(MockProvider):
+        async def query(self, _options: ProviderQueryOptions) -> AsyncIterator[ProviderEvent]:
+            raise ToolResultSafetyInspectionFailed()
+            yield  # pragma: no cover
+
+    with pytest.raises(ToolResultSafetyInspectionFailed):
+        await run_agent_query(
+            SafetyFailureProvider(),
+            prompt="test",
+            system_prompt="You are an AI agent.",
+            output_schema=None,
+            context=None,
+            skills_dir="/workspace",
+            model="test-model",
+            max_turns=200,
+            timeout_seconds=300,
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_query_deadline_during_inspection_is_safety_failure() -> None:
+    blocked = asyncio.Event()
+
+    async def inspect(_name: str, _result_type: str, _content: object, _call_id: str) -> None:
+        await blocked.wait()
+
+    class BlockedInspectorProvider(MockProvider):
+        async def query(self, _options: ProviderQueryOptions) -> AsyncIterator[ProviderEvent]:
+            middleware = ToolResultInspectionMiddleware(inspect)
+            request = SimpleNamespace(
+                messages=[ToolMessage(content="result", name="execute", tool_call_id="call-1")]
+            )
+
+            async def model_handler(_request: object) -> None:
+                return None
+
+            await middleware.awrap_model_call(request, model_handler)
+            yield ResultEvent(text='{"success":true}')
+
+    with pytest.raises(ToolResultSafetyInspectionFailed):
+        await run_agent_query(
+            BlockedInspectorProvider(),
+            prompt="test",
+            system_prompt="You are an AI agent.",
+            output_schema=None,
+            context=None,
+            skills_dir="/workspace",
+            model="test-model",
+            max_turns=200,
+            timeout_seconds=0.05,
+        )
+
+
+@pytest.mark.asyncio
 async def test_run_agent_query_timeout() -> None:
     """Wall-clock timeout yields agent failure with a timed-out summary."""
 
@@ -230,6 +290,47 @@ async def test_run_agent_query_audit_enabled() -> None:
         audit_enabled=True,
     )
     assert result.output["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_deepagents_logs_redact_tool_payloads_but_audit_keeps_passed_content(
+    span_exporter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class DeepAgentsProvider(MockProvider):
+        @property
+        def name(self) -> str:
+            return "deepagents"
+
+    caplog.set_level(logging.INFO, logger="lightspeed_agentic")
+    result = await run_agent_query(
+        DeepAgentsProvider(
+            events=[
+                ToolCallEvent(name="execute", input="SECRET-TOOL-ARGUMENT", call_id="tool-1"),
+                ToolResultEvent(output="COMPLETE-PASSED-TOOL-RESULT", call_id="tool-1"),
+                ResultEvent(text='{"success":true,"summary":"done"}'),
+            ]
+        ),
+        prompt="test",
+        system_prompt="You are an AI agent.",
+        output_schema=None,
+        context=None,
+        skills_dir="/workspace",
+        model="test-model",
+        max_turns=200,
+        timeout_seconds=300,
+        audit_enabled=True,
+        capture_content=True,
+    )
+
+    assert result.output["success"] is True
+    assert "SECRET-TOOL-ARGUMENT" not in caplog.text
+    assert "COMPLETE-PASSED-TOOL-RESULT" not in caplog.text
+    tool_span = next(
+        span for span in span_exporter.get_finished_spans() if span.name == "execute_tool execute"
+    )
+    assert tool_span.attributes["tool.input"] == "SECRET-TOOL-ARGUMENT"
+    assert tool_span.attributes["tool.output"] == "COMPLETE-PASSED-TOOL-RESULT"
 
 
 @pytest.mark.asyncio

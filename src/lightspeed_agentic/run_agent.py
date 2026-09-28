@@ -14,12 +14,18 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 
 from lightspeed_agentic.audit import AuditLogger
+from lightspeed_agentic.inspection.errors import ToolResultSafetyInspectionFailed
 from lightspeed_agentic.logging import EventLogger
 from lightspeed_agentic.mcp import AdmittedMCPProviderServer
 from lightspeed_agentic.metrics import operation_duration, token_usage
 from lightspeed_agentic.tools import DEFAULT_ALLOWED_TOOLS
 from lightspeed_agentic.tracing import get_tracer, parse_traceparent
-from lightspeed_agentic.types import AgentProvider, ProviderQueryOptions
+from lightspeed_agentic.types import (
+    AgentProvider,
+    ProviderQueryOptions,
+    ToolCallEvent,
+    ToolResultEvent,
+)
 
 logger = logging.getLogger("lightspeed_agentic")
 
@@ -36,6 +42,17 @@ class AgentResult:
 
 class ContextFormatError(ValueError):
     """``context`` JSON is present but missing fields required for prefix formatting."""
+
+
+def _developer_log_event(provider_name: str, event: Any) -> Any:
+    """Remove DeepAgents tool payloads from developer logs, retaining safe metadata."""
+    if provider_name != "deepagents":
+        return event
+    if event.type == "tool_call":
+        return ToolCallEvent(name=event.name, call_id=event.call_id)
+    if event.type == "tool_result":
+        return ToolResultEvent(call_id=event.call_id)
+    return event
 
 
 def _require_mapping(value: Any, path: str) -> dict[str, Any]:
@@ -252,11 +269,12 @@ async def run_agent_query(
                         mcp_servers=mcp_servers or [],
                         reasoning_config=reasoning_config,
                         tool_output_inspection_enabled=tool_output_inspection_enabled,
+                        deadline=time.monotonic() + timeout_seconds,
                     )
                 )
                 event_logger = EventLogger("run")
                 async for event in result:
-                    event_logger.log(event)
+                    event_logger.log(_developer_log_event(provider.name, event))
                     audit_logger.process_event(event)
                     if event.type == "result":
                         text = event.text
@@ -289,6 +307,14 @@ async def run_agent_query(
             timed_out=True,
         )
     except Exception as exc:
+        if isinstance(exc, ToolResultSafetyInspectionFailed):
+            audit_logger.complete(
+                success=False,
+                input_tokens=0,
+                output_tokens=0,
+                span=chat_span,
+            )
+            raise
         audit_logger.complete(
             success=False,
             input_tokens=0,

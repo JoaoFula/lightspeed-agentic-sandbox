@@ -37,9 +37,6 @@ from lightspeed_agentic.types import (
 
 logger = logging.getLogger(__name__)
 
-TOOL_INPUT_MAX_CHARS = 10_000
-TOOL_OUTPUT_MAX_CHARS = 10_000
-
 _JSON_SCHEMA_TYPE_MAP: dict[str, type[Any]] = {
     "string": str,
     "integer": int,
@@ -257,7 +254,7 @@ def _tool_call_events(msg: Any) -> list[ProviderEvent]:
     return [
         ToolCallEvent(
             name=tc.get("name", ""),
-            input=json.dumps(tc.get("args", {}))[:TOOL_INPUT_MAX_CHARS],
+            input=json.dumps(tc.get("args", {})),
             call_id=tc.get("id", ""),
         )
         for tc in msg.tool_calls or []
@@ -314,6 +311,9 @@ class DeepAgentsProvider(AgentProvider):
         from deepagents import create_deep_agent
         from deepagents.backends import LocalShellBackend
 
+        classifier_model: Any | None = None
+        inspection_middleware: Any | None = None
+
         logger.debug(
             "Starting deepagents query model=%s cwd=%s max_turns=%s",
             options.model,
@@ -333,6 +333,62 @@ class DeepAgentsProvider(AgentProvider):
             "backend": backend,
             "system_prompt": options.system_prompt,
         }
+
+        if options.tool_output_inspection_enabled:
+            from lightspeed_agentic.inspection.errors import ToolResultSafetyInspectionFailed
+
+            try:
+                from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+                from lightspeed_agentic.inspection.chunking import Utf8ByteCodec
+                from lightspeed_agentic.inspection.client import LangChainClassifierClient
+                from lightspeed_agentic.inspection.inspector import (
+                    inspect_tool_result as run_inspection,
+                )
+                from lightspeed_agentic.inspection.middleware import ToolResultInspectionMiddleware
+
+                classifier_model = _resolve_model(options.model, reasoning_config=None)
+                classifier_client = LangChainClassifierClient(classifier_model)
+                model_profile = getattr(classifier_model, "profile", None) or {}
+                context_window_tokens = (
+                    model_profile.get("max_input_tokens")
+                    or model_profile.get("max_context_size")
+                    or 100_000
+                )
+
+                async def inspect_tool_result_callback(
+                    tool_name: str,
+                    result_type: str,
+                    value: Any,
+                    tool_call_id: str,
+                ) -> Any:
+                    return await run_inspection(
+                        classifier_client,
+                        tool_name=tool_name,
+                        result_type=result_type,
+                        value=value,
+                        codec=Utf8ByteCodec(),
+                        tool_call_id=tool_call_id or None,
+                        context_window_tokens=context_window_tokens,
+                        instruction_tokens=512,
+                        output_tokens=128,
+                        deadline=options.deadline,
+                        provider="anthropic",
+                        model=options.model,
+                    )
+
+                inspection_middleware = ToolResultInspectionMiddleware(inspect_tool_result_callback)
+                agent_kwargs["middleware"] = [inspection_middleware]
+                agent_kwargs["subagents"] = [
+                    {
+                        **GENERAL_PURPOSE_SUBAGENT,
+                        "middleware": [inspection_middleware],
+                    }
+                ]
+            except Exception as exc:
+                if classifier_model is not None:
+                    await _close_model_clients(classifier_model)
+                raise ToolResultSafetyInspectionFailed() from exc
 
         if has_skills(options.cwd):
             agent_kwargs["skills"] = [options.cwd]
@@ -381,6 +437,7 @@ class DeepAgentsProvider(AgentProvider):
             "recursion_limit": options.max_turns,
         }
         result_text = ""
+        pending_tool_results: list[tuple[str, str, str, Any, ToolResultEvent]] = []
         total_input_tokens = 0
         total_output_tokens = 0
         pending_tool_call_chunk: Any | None = None
@@ -401,6 +458,24 @@ class DeepAgentsProvider(AgentProvider):
                 stream_mode="messages",
             ):
                 if msg.type in ("ai", "AIMessageChunk"):
+                    if inspection_middleware is not None:
+                        for (
+                            tool_name,
+                            result_type,
+                            call_id,
+                            content,
+                            pending_event,
+                        ) in pending_tool_results:
+                            if not inspection_middleware.is_passed(
+                                tool_name,
+                                result_type,
+                                call_id,
+                                content,
+                            ):
+                                raise ToolResultSafetyInspectionFailed()
+                            yield pending_event
+                        pending_tool_results.clear()
+
                     include_tool_calls = msg.type != "AIMessageChunk"
                     if msg.type == "AIMessageChunk":
                         is_last_chunk = getattr(msg, "chunk_position", None) == "last"
@@ -432,8 +507,8 @@ class DeepAgentsProvider(AgentProvider):
                         msg,
                         include_tool_calls=include_tool_calls,
                     )
-                    for event in events:
-                        yield event
+                    for provider_event in events:
+                        yield provider_event
                     result_text += text_delta
                     total_input_tokens += in_tok
                     total_output_tokens += out_tok
@@ -441,14 +516,27 @@ class DeepAgentsProvider(AgentProvider):
                 elif msg.type in ("tool", "ToolMessageChunk"):
                     for event in flush_pending_tool_calls():
                         yield event
-                    yield ToolResultEvent(
-                        output=stringify(msg.content)[:TOOL_OUTPUT_MAX_CHARS],
-                        call_id=getattr(msg, "tool_call_id", ""),
+                    tool_name = getattr(msg, "name", "") or ""
+                    result_type = (
+                        "error" if getattr(msg, "status", "success") == "error" else "result"
                     )
+                    call_id = getattr(msg, "tool_call_id", "") or ""
+                    tool_result_event = ToolResultEvent(
+                        output=stringify(msg.content),
+                        call_id=call_id,
+                    )
+                    if inspection_middleware is None:
+                        yield tool_result_event
+                    else:
+                        pending_tool_results.append(
+                            (tool_name, result_type, call_id, msg.content, tool_result_event)
+                        )
             for event in flush_pending_tool_calls():
                 yield event
         finally:
             await _close_model_clients(chat_model)
+            if classifier_model is not None:
+                await _close_model_clients(classifier_model)
 
         if schema_model is not None:
             structured, in_tok, out_tok = await _shape_structured_output(

@@ -9,6 +9,16 @@ from typing import Any, Protocol
 CHUNK_OVERLAP_TOKENS = 256
 
 
+class Utf8ByteCodec:
+    """Conservative fallback codec used when the provider exposes no tokenizer."""
+
+    def encode(self, text: str) -> list[int]:
+        return list(text.encode("utf-8"))
+
+    def decode(self, tokens: list[int]) -> str:
+        return bytes(tokens).decode("utf-8")
+
+
 class TokenCodec(Protocol):
     """Token encoder/decoder for the active classifier model."""
 
@@ -39,6 +49,22 @@ def serialize_tool_result(value: Any) -> str:
         raise ValueError("tool result is not JSON serializable") from exc
 
 
+def _is_utf8_continuation(byte: int) -> bool:
+    return byte & 0b1100_0000 == 0b1000_0000
+
+
+def _align_utf8_start(tokens: list[int], position: int) -> int:
+    while position > 0 and _is_utf8_continuation(tokens[position]):
+        position -= 1
+    return position
+
+
+def _align_utf8_end(tokens: list[int], position: int) -> int:
+    while position < len(tokens) and _is_utf8_continuation(tokens[position]):
+        position -= 1
+    return position
+
+
 def chunk_tool_result(
     value: Any,
     *,
@@ -61,10 +87,23 @@ def chunk_tool_result(
     start = 0
     while start < len(tokens):
         end = min(start + capacity, len(tokens))
+        if isinstance(codec, Utf8ByteCodec):
+            end = _align_utf8_end(tokens, end)
+            if end <= start:
+                raise ValueError(
+                    "classifier context budget is too small for UTF-8 chunk boundaries"
+                )
         raw_chunks.append(codec.decode(tokens[start:end]))
         if end == len(tokens):
             break
-        start = end - CHUNK_OVERLAP_TOKENS
+        next_start = end - CHUNK_OVERLAP_TOKENS
+        if isinstance(codec, Utf8ByteCodec):
+            next_start = _align_utf8_start(tokens, next_start)
+            if next_start <= start:
+                raise ValueError(
+                    "classifier context budget is too small for UTF-8 chunk boundaries"
+                )
+        start = next_start
 
     count = len(raw_chunks)
     return [

@@ -6,6 +6,7 @@ import pytest
 
 from lightspeed_agentic.inspection.chunking import (
     ToolResultChunk,
+    Utf8ByteCodec,
     chunk_tool_result,
     serialize_tool_result,
 )
@@ -72,6 +73,40 @@ def test_adjacent_chunks_overlap_by_256_tokens() -> None:
     assert chunks[1].content[-256:] == chunks[2].content[:256]
     assert chunks[0].chunk_index == 0
     assert chunks[-1].chunk_count == len(chunks)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "character"),
+    [(599, "é"), (343, "€"), (597, "😀"), (341, "😀")],
+)
+def test_utf8_byte_codec_chunks_keep_code_points_and_complete_coverage(
+    prefix: int,
+    character: str,
+) -> None:
+    value = "a" * prefix + character + "bcdefghij" * 150
+    chunks = chunk_tool_result(
+        value,
+        codec=Utf8ByteCodec(),
+        context_window_tokens=640,
+        instruction_tokens=20,
+        output_tokens=20,
+    )
+
+    chunk_texts = [chunk.content for chunk in chunks]
+    assert all(text.encode("utf-8").decode("utf-8") == text for text in chunk_texts)
+    assert all(len(text.encode("utf-8")) <= 600 for text in chunk_texts)
+    assert all(value.find(text) >= 0 for text in chunk_texts)
+
+    reconstructed = chunk_texts[0]
+    for text in chunk_texts[1:]:
+        overlap = next(
+            text[:size]
+            for size in range(1, min(260, len(text)) + 1)
+            if 256 <= len(text[:size].encode("utf-8")) <= 260
+            and reconstructed.endswith(text[:size])
+        )
+        reconstructed += text[len(overlap) :]
+    assert reconstructed == value
 
 
 def test_small_result_uses_one_chunk_without_truncation() -> None:

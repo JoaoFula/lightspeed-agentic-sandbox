@@ -95,7 +95,7 @@ Telemetry aligns with [OTel GenAI Semantic Conventions](https://github.com/open-
 
 18b. Each DeepAgents inspection MUST create the contract's `tool_result.inspection` span and attach it to the parent agent trace.
 
-18c. The sandbox can add controlled tool, provider, and model identifiers to the contract-defined attributes.
+18c. The sandbox can add controlled tool, provider, model, and tool-call correlation identifiers to the contract-defined attributes. Each inspection span MUST include `gen_ai.tool.call.id` when the inspected `ToolMessage` provides a non-empty call ID. This value MUST match the correlated `execute_tool` span.
 
 18d. Existing generic inference instrumentation can observe classifier calls. The sandbox MUST add no feature-specific Prometheus metric.
 

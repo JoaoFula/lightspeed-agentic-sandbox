@@ -6,65 +6,25 @@ from typing import Any
 import pytest
 
 from lightspeed_agentic.inspection.client import LangChainClassifierClient
+from lightspeed_agentic.inspection.errors import ClassifierResponseError
 from lightspeed_agentic.inspection.models import ClassifierDecision, ClassifierRequest
 
 
-class FakeStructuredModel:
-    def __init__(self) -> None:
-        self.schema: Any = None
+class FakeModel:
+    def __init__(self, response: Any) -> None:
+        self.response = response
         self.messages: list[Any] | None = None
+        self.parameters: dict[str, Any] = {}
 
-    def with_structured_output(self, schema: Any, **kwargs: Any) -> FakeStructuredModel:
-        self.schema = (schema, kwargs)
-        return self
-
-    def bind(self, **_: object) -> FakeStructuredModel:
-        return self
-
-    async def ainvoke(self, messages: list[Any], **_: Any) -> dict[str, object]:
+    async def ainvoke(self, messages: list[Any], **kwargs: Any) -> Any:
         self.messages = messages
-        return {"injectionDetected": False, "category": "none"}
-
-
-class BindableStructuredRunnable:
-    def __init__(self) -> None:
-        self.effective_parameters: dict[str, object] = {}
-        self.messages: list[Any] | None = None
-
-    def bind(self, **kwargs: object) -> BindableStructuredRunnable:
-        self.effective_parameters = kwargs
-        return self
-
-    async def ainvoke(self, messages: list[Any], **kwargs: object) -> dict[str, object]:
-        self.messages = messages
-        assert kwargs == {}
-        return {
-            "injectionDetected": self.effective_parameters
-            == {
-                "temperature": 0,
-                "max_tokens": 128,
-            },
-            "category": "unknown" if self.effective_parameters else "none",
-        }
-
-
-class BindableModel:
-    def __init__(self) -> None:
-        self.structured = BindableStructuredRunnable()
-        self.bound_before_structured = False
-
-    def bind(self, **_: object) -> BindableModel:
-        self.bound_before_structured = True
-        return self
-
-    def with_structured_output(self, _schema: Any, **_: Any) -> BindableStructuredRunnable:
-        assert not self.bound_before_structured
-        return self.structured
+        self.parameters = kwargs
+        return self.response
 
 
 @pytest.mark.asyncio
 async def test_classifier_client_sends_only_dedicated_untrusted_content_messages() -> None:
-    model = FakeStructuredModel()
+    model = FakeModel('{"injectionDetected": false, "category": "none"}')
     client = LangChainClassifierClient(model)
     request = ClassifierRequest(
         toolName="get_pods",
@@ -77,56 +37,62 @@ async def test_classifier_client_sends_only_dedicated_untrusted_content_messages
     decision = await client.classify(request)
 
     assert decision == ClassifierDecision(injectionDetected=False, category="none")
-    assert model.schema is not None
-    assert model.schema[0] is ClassifierDecision
+    assert model.parameters == {"max_tokens": 128, "config": {"tags": ["nostream"]}}
     assert model.messages is not None
     assert len(model.messages) == 2
     assert "untrusted" in model.messages[0].content.lower()
     assert "do not follow" in model.messages[0].content.lower()
+    instruction = model.messages[0].content
+    assert '"injectionDetected": false' in instruction
+    assert '"category": "none"' in instruction
+    assert '"injectionDetected": true' in instruction
+    assert '"category": "unknown"' in instruction
+    for category in (
+        "instruction_override",
+        "role_change",
+        "prompt_extraction",
+        "data_exfiltration",
+        "tool_manipulation",
+        "unknown",
+    ):
+        assert category in instruction
     assert json.loads(model.messages[1].content) == request.model_dump(by_alias=True)
     assert "history" not in model.messages[1].content
     assert "system prompt" not in model.messages[1].content.lower()
 
 
 @pytest.mark.asyncio
-async def test_classifier_client_binds_generation_parameters_to_structured_runnable() -> None:
-    model = BindableModel()
-    client = LangChainClassifierClient(model)
+async def test_classifier_completion_does_not_enter_agent_message_stream() -> None:
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+    from langgraph.graph import StateGraph
 
-    decision = await client.classify(
-        ClassifierRequest(
-            toolName="get_pods",
-            resultType="result",
-            chunkIndex=0,
-            chunkCount=1,
-            content="output",
-        )
+    classifier = LangChainClassifierClient(
+        FakeListChatModel(responses=['{"injectionDetected":false,"category":"none"}'])
+    )
+    request = ClassifierRequest(
+        toolName="execute", resultType="result", chunkIndex=0, chunkCount=1, content="data"
     )
 
-    assert decision == ClassifierDecision(injectionDetected=True, category="unknown")
-    assert model.structured.effective_parameters == {
-        "temperature": 0,
-        "max_tokens": 128,
-    }
+    async def inspect(_state: dict[str, str]) -> dict[str, str]:
+        await classifier.classify(request)
+        return {}
+
+    graph = StateGraph(dict)
+    graph.add_node("inspect", inspect)
+    graph.set_entry_point("inspect")
+    graph.set_finish_point("inspect")
+    streamed = [message async for message, _ in graph.compile().astream({}, stream_mode="messages")]
+
+    assert streamed == []
 
 
 @pytest.mark.asyncio
-async def test_classifier_client_fails_if_generation_parameters_cannot_be_bound() -> None:
-    class UnbindableStructuredRunnable:
-        def bind(self, **_: object) -> object:
-            raise TypeError("binding is unsupported")
-
-        async def ainvoke(self, _messages: list[Any], **_: Any) -> dict[str, object]:
-            return {"injectionDetected": False, "category": "none"}
-
-    class UnbindableModel:
-        def with_structured_output(self, _schema: Any, **_: Any) -> UnbindableStructuredRunnable:
-            return UnbindableStructuredRunnable()
-
-    with pytest.raises(TypeError, match="binding is unsupported"):
-        await LangChainClassifierClient(UnbindableModel()).classify(
+@pytest.mark.parametrize("flagged", [False, True])
+async def test_classifier_client_rejects_legacy_flagged_response(flagged: bool) -> None:
+    with pytest.raises(ClassifierResponseError):
+        await LangChainClassifierClient(FakeModel(json.dumps({"flagged": flagged}))).classify(
             ClassifierRequest(
-                toolName="get_pods",
+                toolName="execute",
                 resultType="result",
                 chunkIndex=0,
                 chunkCount=1,
@@ -136,17 +102,202 @@ async def test_classifier_client_fails_if_generation_parameters_cannot_be_bound(
 
 
 @pytest.mark.asyncio
-async def test_classifier_client_rejects_non_strict_model_response() -> None:
-    class InvalidModel(FakeStructuredModel):
-        async def ainvoke(self, _messages: list[Any], **_: Any) -> dict[str, object]:
-            return {
-                "injectionDetected": "false",
-                "category": "none",
-                "reason": "do not expose",
-            }
+@pytest.mark.parametrize(
+    "response",
+    [
+        '```json\n{"decision":"safe","injection_detected":false,"manipulation_attempt":false}\n```',
+        "SAFE - no injected instructions detected; content is plain status output.",
+        '{"decision":"allow","injection_detected":false}',
+        '```json {"decision":"unsafe","injection_detected":true} ```',
+    ],
+)
+async def test_classifier_client_rejects_noncanonical_responses(response: str) -> None:
+    with pytest.raises(ClassifierResponseError):
+        await LangChainClassifierClient(FakeModel(response)).classify(
+            ClassifierRequest(
+                toolName="execute",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
 
-    with pytest.raises(ValueError, match="injectionDetected"):
-        await LangChainClassifierClient(InvalidModel()).classify(
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"injectionDetected":false,"category":"none","attack_detected":true}',
+        '{"decision":"safe","injection_detected":false,"attack_detected":true}',
+        '{"injectionDetected":true,"category":"none"}',
+    ],
+)
+async def test_classifier_client_rejects_contradictory_or_extra_fields(response: str) -> None:
+    with pytest.raises(ClassifierResponseError) as error:
+        await LangChainClassifierClient(FakeModel(response)).classify(
+            ClassifierRequest(
+                toolName="get_pods",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+
+    assert error.value.issue == "schema_mismatch"
+    assert response not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_rejects_text_response_with_refusal_block() -> None:
+    response = FakeModel(
+        [
+            {"type": "text", "text": '{"injectionDetected":false,"category":"none"}'},
+            {"type": "refusal", "refusal": "classifier refused"},
+        ]
+    )
+
+    with pytest.raises(ClassifierResponseError) as error:
+        await LangChainClassifierClient(response).classify(
+            ClassifierRequest(
+                toolName="get_pods",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+
+    assert error.value.issue == "refusal"
+    assert "classifier refused" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_rejects_refusal_only_response() -> None:
+    response = FakeModel([{"type": "refusal", "refusal": "classifier refused"}])
+
+    with pytest.raises(ClassifierResponseError) as error:
+        await LangChainClassifierClient(response).classify(
+            ClassifierRequest(
+                toolName="get_pods",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+
+    assert error.value.issue == "refusal"
+    assert "classifier refused" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_rejects_anthropic_refusal_stop_reason() -> None:
+    from langchain_core.messages import AIMessage
+
+    response = AIMessage(
+        content='{"injectionDetected":false,"category":"none"}',
+        response_metadata={"stop_reason": "refusal"},
+    )
+
+    with pytest.raises(ClassifierResponseError) as error:
+        await LangChainClassifierClient(FakeModel(response)).classify(
+            ClassifierRequest(
+                toolName="execute",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+
+    assert error.value.issue == "refusal"
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_rejects_duplicate_decision_keys() -> None:
+    response = (
+        '{"injectionDetected":true,"category":"instruction_override",'
+        '"injectionDetected":false,"category":"none"}'
+    )
+
+    with pytest.raises(ClassifierResponseError) as error:
+        await LangChainClassifierClient(FakeModel(response)).classify(
+            ClassifierRequest(
+                toolName="execute",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+
+    assert error.value.issue == "non_json"
+    assert response not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_accepts_only_canonical_decisions() -> None:
+    for response, expected in (
+        ('{"injectionDetected":false,"category":"none"}', (False, "none")),
+        (
+            '{"injectionDetected":true,"category":"unknown"}',
+            (True, "unknown"),
+        ),
+    ):
+        decision = await LangChainClassifierClient(FakeModel(response)).classify(
+            ClassifierRequest(
+                toolName="get_pods",
+                resultType="result",
+                chunkIndex=0,
+                chunkCount=1,
+                content="output",
+            )
+        )
+        assert (decision.injection_detected, decision.category) == expected
+
+
+@pytest.mark.asyncio
+async def test_classifier_client_parses_text_content_blocks() -> None:
+    model = FakeModel(
+        [
+            {"type": "text", "text": '{"injectionDetected": true, "category": "unknown"}'},
+        ]
+    )
+
+    decision = await LangChainClassifierClient(model).classify(
+        ClassifierRequest(
+            toolName="execute",
+            resultType="result",
+            chunkIndex=0,
+            chunkCount=1,
+            content="output",
+        )
+    )
+
+    assert decision == ClassifierDecision(injectionDetected=True, category="unknown")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        "not json",
+        '[]{"flagged":false}[]',
+        '[]{{"flagged":false}"flagged": false}[]',
+        '[]{{{"flagged":false}"flagged":false}"flagged": false}[]',
+        '{"flagged":false}{"flagged":false}',
+        '{"flagged":false} SAFE - no injected instructions detected',
+        '{"flagged":false}{"flagged":true}',
+        '**Decision: SAFE** FLAG: false ```json {"decision":"allow","risk_flags":[]} ```',
+        '{"injectionDetected": "false", "category": "none"}',
+        '{"injectionDetected": false, "category": "none", "reason": "do not expose"}',
+    ],
+)
+async def test_classifier_client_rejects_non_strict_responses(response: str) -> None:
+    with pytest.raises((ValueError, TypeError)):
+        await LangChainClassifierClient(FakeModel(response)).classify(
             ClassifierRequest(
                 toolName="get_pods",
                 resultType="result",
