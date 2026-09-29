@@ -479,6 +479,8 @@ def _build_job_spec(
         env.append({"name": "LIGHTSPEED_AGENT_TIMEOUT_SECONDS", "value": str(timeout_seconds)})
     if "LIGHTSPEED_AGENT_MAX_TURNS" not in env_names:
         env.append({"name": "LIGHTSPEED_AGENT_MAX_TURNS", "value": E2E_DEFAULT_AGENT_MAX_TURNS})
+    if "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED" not in env_names:
+        env.append({"name": "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", "value": "false"})
     if otel_enabled:
         env.extend(
             [
