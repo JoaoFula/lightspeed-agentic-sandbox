@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+import lightspeed_agentic.config as config
 from lightspeed_agentic.config import (
     parse_agent_timeout,
     parse_max_turns,
@@ -27,6 +28,7 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Remove all LIGHTSPEED_* and SDK-specific vars to isolate tests."""
     for var in [
         "LIGHTSPEED_PROVIDER",
+        "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED",
         "LIGHTSPEED_MODEL",
         "LIGHTSPEED_MODEL_PROVIDER",
         "LIGHTSPEED_PROVIDER_URL",
@@ -401,3 +403,44 @@ def test_max_turns_valid_middle(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIGHTSPEED_AGENT_MAX_TURNS", "10")
     result = parse_max_turns()
     assert result == 10
+
+
+def test_tool_output_inspection_defaults_to_enabled_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", raising=False)
+
+    assert config.parse_tool_output_inspection_enabled() is True
+
+
+def test_tool_output_inspection_defaults_to_enabled_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", "  ")
+
+    assert config.parse_tool_output_inspection_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", "TrUe"])
+def test_tool_output_inspection_accepts_true_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", value)
+
+    assert config.parse_tool_output_inspection_enabled() is True
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "FaLsE"])
+def test_tool_output_inspection_accepts_false_values(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", value)
+
+    assert config.parse_tool_output_inspection_enabled() is False
+
+
+def test_tool_output_inspection_rejects_invalid_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", "yes")
+
+    with pytest.raises(ValueError, match="LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"):
+        config.parse_tool_output_inspection_enabled()

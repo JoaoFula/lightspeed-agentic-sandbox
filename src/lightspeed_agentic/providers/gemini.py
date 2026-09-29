@@ -16,6 +16,8 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from lightspeed_agentic.types import (
+    MAX_TOOL_RETURN_CHARS,
+    TOOL_RETURN_PREVIEW_CHARS,
     AgentProvider,
     ContentBlockStopEvent,
     ProviderEvent,
@@ -29,6 +31,26 @@ from lightspeed_agentic.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _trim_tool_response(
+    tool: Any,
+    args: dict[str, Any],
+    tool_context: Any,
+    tool_response: Any,
+) -> Any:
+    """Replace oversized Gemini tool results with a bounded preview."""
+    _ = tool, args, tool_context
+    serialized = stringify(tool_response)
+    if len(serialized) <= MAX_TOOL_RETURN_CHARS:
+        return None
+
+    return {
+        "status": "truncated",
+        "preview": serialized[:TOOL_RETURN_PREVIEW_CHARS],
+        "original_size": len(serialized),
+        "message": "Tool output was truncated; request a narrower result if needed.",
+    }
 
 
 def _load_skills_toolset(skills_dir: str) -> Any:
@@ -67,6 +89,7 @@ class GeminiProvider(AgentProvider):
     async def query(self, options: ProviderQueryOptions) -> AsyncIterator[ProviderEvent]:
         from google.adk.agents import Agent, RunConfig
         from google.adk.agents.run_config import StreamingMode
+        from google.adk.models import Gemini
         from google.adk.runners import Runner
         from google.adk.sessions import InMemorySessionService
         from google.adk.tools import (  # type: ignore[attr-defined]
@@ -77,6 +100,8 @@ class GeminiProvider(AgentProvider):
         from google.adk.tools.bash_tool import ExecuteBashTool
         from google.adk.tools.tool_confirmation import ToolConfirmation
         from google.genai import types
+
+        from lightspeed_agentic.tls import get_ssl_context
 
         workspace = pathlib.Path(options.cwd)
 
@@ -108,10 +133,18 @@ class GeminiProvider(AgentProvider):
         if skill_toolset is not None:
             tools.append(skill_toolset)
 
+        mcp_toolsets: list[Any] = []
         if options.mcp_servers:
             from lightspeed_agentic.mcp import to_gemini_mcp_toolsets
 
-            tools.extend(to_gemini_mcp_toolsets(options.mcp_servers))
+            mcp_toolsets = to_gemini_mcp_toolsets(options.mcp_servers)
+            try:
+                for toolset in mcp_toolsets:
+                    tools.extend(await toolset.get_tools())
+            except BaseException:
+                for toolset in mcp_toolsets:
+                    await toolset.close()
+                raise
 
         if not options.output_schema:
             tools.append(exit_loop)
@@ -127,11 +160,20 @@ class GeminiProvider(AgentProvider):
         if options.reasoning_config:
             gen_content_kwargs["thinking_config"] = types.ThinkingConfig(**options.reasoning_config)
 
+        gemini_model = Gemini(
+            model=options.model,
+            client_kwargs={
+                "http_options": types.HttpOptions(
+                    async_client_args={"verify": get_ssl_context()},
+                ),
+            },
+        )
         agent_kwargs: dict[str, Any] = {
             "name": "lightspeed",
-            "model": options.model,
+            "model": gemini_model,
             "instruction": options.system_prompt,
             "tools": tools,
+            "after_tool_callback": _trim_tool_response,
             "generate_content_config": types.GenerateContentConfig(**gen_content_kwargs),
         }
 
@@ -152,7 +194,10 @@ class GeminiProvider(AgentProvider):
             session_service=session_service,
         )
 
-        user_id = f"agent-{int(time.time())}"
+        try:
+            user_id = f"agent-{int(time.time())}"
+        except (OSError, OverflowError, ValueError):
+            user_id = "agent"
         session = await session_service.create_session(app_name="lightspeed", user_id=user_id)
 
         streaming_mode = StreamingMode.SSE if options.stream else StreamingMode.NONE
@@ -165,55 +210,59 @@ class GeminiProvider(AgentProvider):
         total_input_tokens = 0
         total_output_tokens = 0
 
-        async for event in runner.run_async(
-            user_id=user_id,
-            session_id=session.id,
-            new_message=types.Content(
-                role="user",
-                parts=[types.Part(text=options.prompt)],
-            ),
-            run_config=run_config,
-        ):
-            if not event.content or not event.content.parts:
-                continue
-
-            is_partial = getattr(event, "partial", False)
-
-            for part in event.content.parts:
-                if (
-                    hasattr(part, "thought")
-                    and part.thought
-                    and hasattr(part, "text")
-                    and part.text
-                ):
-                    yield ThinkingDeltaEvent(thinking=part.text)
+        try:
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session.id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text=options.prompt)],
+                ),
+                run_config=run_config,
+            ):
+                if not event.content or not event.content.parts:
                     continue
 
-                if hasattr(part, "text") and part.text:
-                    if options.stream and is_partial:
-                        yield TextDeltaEvent(text=part.text)
-                    if not is_partial and not event.get_function_calls():
-                        result_text = part.text
+                is_partial = getattr(event, "partial", False)
 
-                if hasattr(part, "function_call") and part.function_call:
-                    fc = part.function_call
-                    yield ToolCallEvent(
-                        name=fc.name or "",
-                        input=json.dumps(dict(fc.args) if fc.args else {}),
-                        call_id=getattr(fc, "id", "") or "",
-                    )
+                for part in event.content.parts:
+                    if (
+                        hasattr(part, "thought")
+                        and part.thought
+                        and hasattr(part, "text")
+                        and part.text
+                    ):
+                        yield ThinkingDeltaEvent(thinking=part.text)
+                        continue
 
-                if hasattr(part, "function_response") and part.function_response:
-                    fr = part.function_response
-                    yield ToolResultEvent(
-                        output=stringify(fr.response),
-                        call_id=getattr(fr, "id", "") or "",
-                    )
+                    if hasattr(part, "text") and part.text:
+                        if options.stream and is_partial:
+                            yield TextDeltaEvent(text=part.text)
+                        if not is_partial and not event.get_function_calls():
+                            result_text = part.text
 
-            usage = getattr(event, "usage_metadata", None)
-            if usage:
-                total_input_tokens = getattr(usage, "prompt_token_count", 0) or 0
-                total_output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+                    if hasattr(part, "function_call") and part.function_call:
+                        fc = part.function_call
+                        yield ToolCallEvent(
+                            name=fc.name or "",
+                            input=json.dumps(dict(fc.args) if fc.args else {}),
+                            call_id=getattr(fc, "id", "") or "",
+                        )
+
+                    if hasattr(part, "function_response") and part.function_response:
+                        fr = part.function_response
+                        yield ToolResultEvent(
+                            output=stringify(fr.response),
+                            call_id=getattr(fr, "id", "") or "",
+                        )
+
+                usage = getattr(event, "usage_metadata", None)
+                if usage:
+                    total_input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                    total_output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        finally:
+            for toolset in mcp_toolsets:
+                await toolset.close()
 
         yield ContentBlockStopEvent()
 

@@ -8,15 +8,19 @@ and tests that stay offline unless you are intentionally running live cluster BD
 ## General coding behavior
 
 ### Think before you implement
+
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
 Before implementing:
+
 - State your assumptions explicitly. If uncertain, ask.
 - If multiple interpretations exist, present them - don't pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
 - If something is unclear, stop. Name what's confusing. Ask.
 
 ### Simplicity first
+
 **Minimum code that solves the problem. Nothing speculative.**
+
 - No features beyond what was asked.
 - No abstractions for single-use code.
 - No "flexibility" or "configurability" that wasn't requested.
@@ -26,28 +30,34 @@ Before implementing:
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
 
 ### Surgical Changes
+
 **Touch only what you must. Clean up only your own mess.**
 When editing existing code:
+
 - Don't "improve" adjacent code, comments, or formatting.
 - Don't refactor things that aren't broken.
 - Match existing style, even if you'd do it differently.
 - If you notice unrelated dead code, mention it - don't delete it.
 
 When your changes create orphans:
+
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
 
 The test: Every changed line should trace directly to the user's request.
 
 ### Goal-driven execution
+
 **Define success criteria. Loop until verified.**
 
 Transform tasks into verifiable goals:
+
 - "Add validation" → "Write tests for invalid inputs, then make them pass"
 - "Fix the bug" → "Write a test that reproduces it, then make it pass"
 - "Refactor X" → "Ensure tests pass before and after"
 
 For multi-step tasks, state a brief plan:
+
 ```
 1. [Step] → verify: [check]
 2. [Step] → verify: [check]
@@ -63,7 +73,7 @@ All specifications live in `.ai/spec/`. Start with [`.ai/spec/README.md`](.ai/sp
 Before changing code, read the relevant spec:
 
 | Working on | Read |
-|---|---|
+| --- | --- |
 | System overview, integration boundaries | [system-overview.md](.ai/spec/what/system-overview.md) |
 | Provider adapters | [provider-contract.md](.ai/spec/what/provider-contract.md) |
 | Batch entrypoint | [run-api.md](.ai/spec/what/run-api.md) |
@@ -82,7 +92,7 @@ Each spec has a Verification section linking to tests that exercise its rules.
 Use this table to navigate from component → spec → executable tests:
 
 | Spec | Description | Verification |
-|---|---|---|
+| --- | --- | --- |
 | [run-api.md](.ai/spec/what/run-api.md) | Batch entrypoint: input files, context prefix, timeouts, Result CR publishing | [test_batch.py](tests/test_batch.py), [test_batch_input.py](tests/test_batch_input.py), [test_run_agent.py](tests/test_run_agent.py), [test_publish_results_publish.py](tests/test_publish_results_publish.py), [test_publish_results_status.py](tests/test_publish_results_status.py) |
 | [health-probes.md](.ai/spec/what/health-probes.md) | Readiness checks at batch startup (R1) | [test_ready.py](tests/test_ready.py), [test_batch.py](tests/test_batch.py) (readiness fail-fast) |
 | [provider-contract.md](.ai/spec/what/provider-contract.md) | Provider adapter rules: events, structured output, thin-adapter principle | [test_run_agent.py](tests/test_run_agent.py), [test_deepagents.py](tests/test_deepagents.py); live batch: [skills.feature](tests/e2e/features/skills.feature), [structured_output.feature](tests/e2e/features/structured_output.feature), [analysis_output.feature](tests/e2e/features/analysis_output.feature), [mcp.feature](tests/e2e/features/mcp.feature), [reasoning_config.feature](tests/e2e/features/reasoning_config.feature) |
@@ -176,7 +186,7 @@ starts, with no network access during the build itself.
 ### Dependency files
 
 | File | Purpose | How to regenerate |
-|---|---|---|
+| --- | --- | --- |
 | `requirements.x86_64.txt` | Python deps with hashes (x86_64) | `make requirements` |
 | `requirements.aarch64.txt` | Python deps with hashes (aarch64) | `make requirements` |
 | `requirements-build.txt` | Build-time deps for source distributions | `make requirements` |
@@ -243,7 +253,14 @@ The Konflux pipeline will prefetch the new versions on the next PR.
 | `CLAUDE_CODE_USE_BEDROCK` | Set by config mapping for Bedrock → DeepAgents |
 | `CLAUDE_CODE_USE_VERTEX` | When set to `1`, DeepAgents uses Vertex-backed Anthropic (`ChatAnthropicVertex`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Shared OTLP endpoint for traces and logs |
-| `OTEL_EXPORTER_OTLP_CERTIFICATE` | Optional collector CA cert path |
+| `SSL_CERT_FILE` | Combined system and operator-provided CA bundle |
+| `GRPC_DEFAULT_SSL_ROOTS_FILE_PATH` | Combined CA bundle used by gRPC |
+| `AWS_CA_BUNDLE` | Combined CA bundle used by AWS/Botocore |
+| `GRPC_SSL_CIPHER_SUITES` | Resolved TLS cipher suites for gRPC |
+| `LIGHTSPEED_TLS_PROFILE` | Resolved OpenShift TLS profile |
+| `LIGHTSPEED_TLS_MIN_VERSION` | Resolved minimum TLS version |
+| `LIGHTSPEED_TLS_CIPHER_SUITES` | JSON array of resolved TLS cipher suites |
+| `/var/run/secrets/lightspeed/tls/` | Shared read-only root for operator-provided CA files |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (default) or `http/protobuf` |
 | `ANTHROPIC_VERTEX_PROJECT_ID` | Vertex project for Anthropic via Vertex |
 | `CLOUD_ML_REGION` | Vertex region for Anthropic via Vertex (default `global`) |
@@ -255,18 +272,22 @@ passed through by cluster LLM credential Secrets mounted on batch Jobs.
 ## Git and PR Workflow
 
 ### Commit Messages
+
 - Start with the Jira ticket reference: `OLS-XXXX description`
 - Keep the first line under 72 characters
 - Use imperative mood
 
 ### Pull Requests
+
 This repo uses a **fork-based workflow**:
 
 1. **Push to your fork**, not to `origin` (openshift/lightspeed-agentic-sandbox)
 2. **Create the PR** against `origin/main` using your fork's branch:
+
    ```bash
    git push <your-fork-remote> <branch>
    gh pr create --repo openshift/lightspeed-agentic-sandbox --head <your-github-user>:<branch> --base main
    ```
+
 3. **PR title** must start with the Jira reference: `OLS-XXXX description`
 4. **Squash commits** before pushing

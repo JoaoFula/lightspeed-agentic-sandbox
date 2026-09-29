@@ -6,15 +6,17 @@ native skills loading, and v3 event streaming for event mapping.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import os
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from lightspeed_agentic.skills import has_skills
 from lightspeed_agentic.types import (
+    MAX_TOOL_RETURN_CHARS,
     AgentProvider,
     ContentBlockStopEvent,
     ProviderEvent,
@@ -34,9 +36,6 @@ from lightspeed_agentic.types import (
 # not skip work on the hot path once a run is underway.
 
 logger = logging.getLogger(__name__)
-
-TOOL_INPUT_MAX_CHARS = 10_000
-TOOL_OUTPUT_MAX_CHARS = 10_000
 
 _JSON_SCHEMA_TYPE_MAP: dict[str, type[Any]] = {
     "string": str,
@@ -61,6 +60,8 @@ def _anthropic_backend() -> Literal["vertex", "bedrock", "direct"]:
 
 def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -> Any:
     """Build a LangChain chat model instance based on env vars set by config.py."""
+    from functools import cached_property
+
     thinking = reasoning_config.get("thinking") if reasoning_config else None
     backend = _anthropic_backend()
 
@@ -74,10 +75,32 @@ def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -
         }
         if thinking:
             kwargs["thinking"] = thinking
+        from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+        kwargs["http_client"] = create_http_client()
+        kwargs["async_http_client"] = create_async_http_client()
         return ChatAnthropicVertex(**kwargs)
 
     if backend == "bedrock":
+        # langchain_aws uses these Anthropic Bedrock clients internally, but does not
+        # expose a stable injection point for a custom HTTPX client. Keep this import
+        # aligned with the installed anthropic SDK version.
+        from anthropic.lib.bedrock._client import AnthropicBedrock, AsyncAnthropicBedrock
         from langchain_aws import ChatAnthropicBedrock
+
+        from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+        class TLSChatAnthropicBedrock(ChatAnthropicBedrock):
+            @cached_property
+            def _client(self) -> Any:
+                return AnthropicBedrock(**self._client_params, http_client=create_http_client())
+
+            @cached_property
+            def _async_client(self) -> Any:
+                return AsyncAnthropicBedrock(
+                    **self._client_params,
+                    http_client=create_async_http_client(),
+                )
 
         kwargs = {
             "model": model,
@@ -85,14 +108,55 @@ def _resolve_model(model: str, reasoning_config: dict[str, Any] | None = None) -
         }
         if thinking:
             kwargs["thinking"] = thinking
-        return ChatAnthropicBedrock(**kwargs)
+        if not isinstance(ChatAnthropicBedrock, type):
+            return ChatAnthropicBedrock(**kwargs)
+        return TLSChatAnthropicBedrock(**kwargs)
 
+    from anthropic import Anthropic, AsyncAnthropic
     from langchain_anthropic import ChatAnthropic
+
+    from lightspeed_agentic.tls import create_async_http_client, create_http_client
+
+    class TLSChatAnthropic(ChatAnthropic):
+        @cached_property
+        def _client(self) -> Any:
+            return Anthropic(**self._client_params, http_client=create_http_client())
+
+        @cached_property
+        def _async_client(self) -> Any:
+            return AsyncAnthropic(**self._client_params, http_client=create_async_http_client())
 
     kwargs = {"model": model}
     if thinking:
         kwargs["thinking"] = thinking
-    return ChatAnthropic(**kwargs)
+
+    # Support bearer token auth for vLLM and other Anthropic-compatible endpoints
+    default_headers = {}
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if auth_token:
+        default_headers["Authorization"] = f"Bearer {auth_token}"
+    if default_headers:
+        kwargs["default_headers"] = default_headers
+
+    if not isinstance(ChatAnthropic, type):
+        return ChatAnthropic(**kwargs)
+    return TLSChatAnthropic(**kwargs)
+
+
+async def _close_model_clients(model: Any) -> None:
+    """Close already-created sync and async clients without triggering lazy creation."""
+    clients: list[Any] = []
+    model_state = getattr(model, "__dict__", {})
+    for name in ("_async_client", "async_client", "_client", "client"):
+        if name in model_state and model_state[name] not in clients:
+            clients.append(model_state[name])
+
+    for client in clients:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is not None:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
 
 def _json_schema_to_pydantic(schema: dict[str, Any], name: str = "OutputModel") -> Any:
@@ -142,8 +206,8 @@ def _usage_from_message(msg: Any) -> tuple[int, int]:
 
 
 def _structured_output_method() -> str:
-    """Bedrock rejects large json_schema grammars; function_calling avoids compilation."""
-    if _anthropic_backend() == "bedrock":
+    """Anthropic rejects large json_schema grammars; function_calling avoids compilation."""
+    if _anthropic_backend() in {"direct", "bedrock"}:
         return "function_calling"
     return "json_schema"
 
@@ -174,7 +238,10 @@ async def _shape_structured_output(
             )
         ),
     ]
-    result = await structured.ainvoke(shape_messages)
+    try:
+        result = await structured.ainvoke(shape_messages)
+    finally:
+        await _close_model_clients(format_model)
     if isinstance(result, dict) and "parsed" in result:
         parsed = result["parsed"]
         in_tok, out_tok = _usage_from_message(result.get("raw"))
@@ -182,23 +249,28 @@ async def _shape_structured_output(
     return result, 0, 0
 
 
+def _tool_call_events(msg: Any) -> list[ProviderEvent]:
+    """Map complete parsed tool calls to provider events."""
+    return [
+        ToolCallEvent(
+            name=tc.get("name", ""),
+            input=json.dumps(tc.get("args", {})),
+            call_id=tc.get("id", ""),
+        )
+        for tc in msg.tool_calls or []
+    ]
+
+
 def _process_ai_message(
     msg: Any,
+    *,
+    include_tool_calls: bool = True,
 ) -> tuple[list[ProviderEvent], str, int, int]:
     """Map one AIMessage chunk to provider events and token deltas."""
-    events: list[ProviderEvent] = []
+    events: list[ProviderEvent] = _tool_call_events(msg) if include_tool_calls else []
     text_delta = ""
     input_tokens = 0
     output_tokens = 0
-
-    for tc in msg.tool_calls or []:
-        events.append(
-            ToolCallEvent(
-                name=tc.get("name", ""),
-                input=json.dumps(tc.get("args", {}))[:TOOL_INPUT_MAX_CHARS],
-                call_id=tc.get("id", ""),
-            )
-        )
 
     for block in getattr(msg, "content_blocks", []):
         btype = block["type"] if isinstance(block, dict) else getattr(block, "type", "")
@@ -239,6 +311,9 @@ class DeepAgentsProvider(AgentProvider):
         from deepagents import create_deep_agent
         from deepagents.backends import LocalShellBackend
 
+        classifier_model: Any | None = None
+        inspection_middleware: Any | None = None
+
         logger.debug(
             "Starting deepagents query model=%s cwd=%s max_turns=%s",
             options.model,
@@ -247,13 +322,73 @@ class DeepAgentsProvider(AgentProvider):
         )
 
         chat_model = _resolve_model(options.model, options.reasoning_config)
-        backend = LocalShellBackend(root_dir=options.cwd, inherit_env=True)
+        backend = LocalShellBackend(
+            root_dir=options.cwd,
+            inherit_env=True,
+            max_output_bytes=MAX_TOOL_RETURN_CHARS,
+        )
 
         agent_kwargs: dict[str, Any] = {
             "model": chat_model,
             "backend": backend,
             "system_prompt": options.system_prompt,
         }
+
+        if options.tool_output_inspection_enabled:
+            from lightspeed_agentic.inspection.errors import ToolResultSafetyInspectionFailed
+
+            try:
+                from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT
+
+                from lightspeed_agentic.inspection.chunking import Utf8ByteCodec
+                from lightspeed_agentic.inspection.client import LangChainClassifierClient
+                from lightspeed_agentic.inspection.inspector import (
+                    inspect_tool_result as run_inspection,
+                )
+                from lightspeed_agentic.inspection.middleware import ToolResultInspectionMiddleware
+
+                classifier_model = _resolve_model(options.model, reasoning_config=None)
+                classifier_client = LangChainClassifierClient(classifier_model)
+                model_profile = getattr(classifier_model, "profile", None) or {}
+                context_window_tokens = (
+                    model_profile.get("max_input_tokens")
+                    or model_profile.get("max_context_size")
+                    or 100_000
+                )
+
+                async def inspect_tool_result_callback(
+                    tool_name: str,
+                    result_type: str,
+                    value: Any,
+                    tool_call_id: str,
+                ) -> Any:
+                    return await run_inspection(
+                        classifier_client,
+                        tool_name=tool_name,
+                        result_type=result_type,
+                        value=value,
+                        codec=Utf8ByteCodec(),
+                        tool_call_id=tool_call_id or None,
+                        context_window_tokens=context_window_tokens,
+                        instruction_tokens=512,
+                        output_tokens=128,
+                        deadline=options.deadline,
+                        provider="anthropic",
+                        model=options.model,
+                    )
+
+                inspection_middleware = ToolResultInspectionMiddleware(inspect_tool_result_callback)
+                agent_kwargs["middleware"] = [inspection_middleware]
+                agent_kwargs["subagents"] = [
+                    {
+                        **GENERAL_PURPOSE_SUBAGENT,
+                        "middleware": [inspection_middleware],
+                    }
+                ]
+            except Exception as exc:
+                if classifier_model is not None:
+                    await _close_model_clients(classifier_model)
+                raise ToolResultSafetyInspectionFailed() from exc
 
         if has_skills(options.cwd):
             agent_kwargs["skills"] = [options.cwd]
@@ -270,6 +405,8 @@ class DeepAgentsProvider(AgentProvider):
         if options.mcp_servers:
             from langchain_mcp_adapters.client import MultiServerMCPClient
 
+            from lightspeed_agentic.tls import create_async_http_client
+
             client = MultiServerMCPClient(
                 {
                     server.name: {  # type: ignore[misc]
@@ -277,11 +414,15 @@ class DeepAgentsProvider(AgentProvider):
                         "url": server.url,
                         "headers": {h.name: h.value for h in server.headers},
                         "timeout": server.timeout,
+                        "httpx_client_factory": create_async_http_client,
                     }
                     for server in options.mcp_servers
                 }
             )
-            mcp_tools = await client.get_tools()
+            for server in options.mcp_servers:
+                allowed_tool_names = set(server.allowed_tool_names)
+                server_tools = await client.get_tools(server_name=server.name)
+                mcp_tools.extend(tool for tool in server_tools if tool.name in allowed_tool_names)
 
         if mcp_tools:
             agent_kwargs["tools"] = mcp_tools
@@ -296,28 +437,106 @@ class DeepAgentsProvider(AgentProvider):
             "recursion_limit": options.max_turns,
         }
         result_text = ""
+        pending_tool_results: list[tuple[str, str, str, Any, ToolResultEvent]] = []
         total_input_tokens = 0
         total_output_tokens = 0
+        pending_tool_call_chunk: Any | None = None
         input_state = {"messages": [{"role": "user", "content": options.prompt}]}
 
-        async for msg, _stream_metadata in agent.astream(  # type: ignore[call-overload]
-            input_state,
-            config=stream_config,
-            stream_mode="messages",
-        ):
-            if msg.type in ("ai", "AIMessageChunk"):
-                events, text_delta, in_tok, out_tok = _process_ai_message(msg)
-                for event in events:
-                    yield event
-                result_text += text_delta
-                total_input_tokens += in_tok
-                total_output_tokens += out_tok
+        def flush_pending_tool_calls() -> list[ProviderEvent]:
+            nonlocal pending_tool_call_chunk
+            if pending_tool_call_chunk is None:
+                return []
+            events = _tool_call_events(pending_tool_call_chunk)
+            pending_tool_call_chunk = None
+            return events
 
-            elif msg.type in ("tool", "ToolMessageChunk"):
-                yield ToolResultEvent(
-                    output=stringify(msg.content)[:TOOL_OUTPUT_MAX_CHARS],
-                    call_id=getattr(msg, "tool_call_id", ""),
-                )
+        try:
+            async for msg, _stream_metadata in cast(Any, agent).astream(
+                input_state,
+                config=stream_config,
+                stream_mode="messages",
+            ):
+                if msg.type in ("ai", "AIMessageChunk"):
+                    if inspection_middleware is not None:
+                        for (
+                            tool_name,
+                            result_type,
+                            call_id,
+                            content,
+                            pending_event,
+                        ) in pending_tool_results:
+                            if not inspection_middleware.is_passed(
+                                tool_name,
+                                result_type,
+                                call_id,
+                                content,
+                            ):
+                                raise ToolResultSafetyInspectionFailed()
+                            yield pending_event
+                        pending_tool_results.clear()
+
+                    include_tool_calls = msg.type != "AIMessageChunk"
+                    if msg.type == "AIMessageChunk":
+                        is_last_chunk = getattr(msg, "chunk_position", None) == "last"
+                        tool_call_chunks = getattr(msg, "tool_call_chunks", []) or []
+                        if tool_call_chunks or (
+                            pending_tool_call_chunk is not None and is_last_chunk
+                        ):
+                            current_tool_call_chunk = type(msg)(
+                                content="",
+                                tool_call_chunks=tool_call_chunks,
+                                chunk_position="last" if is_last_chunk else None,
+                            )
+                            pending_tool_call_chunk = (
+                                current_tool_call_chunk
+                                if pending_tool_call_chunk is None
+                                else pending_tool_call_chunk + current_tool_call_chunk
+                            )
+                        if is_last_chunk:
+                            for event in flush_pending_tool_calls():
+                                yield event
+                    elif pending_tool_call_chunk is not None:
+                        if getattr(msg, "tool_calls", None):
+                            pending_tool_call_chunk = None
+                        else:
+                            for event in flush_pending_tool_calls():
+                                yield event
+
+                    events, text_delta, in_tok, out_tok = _process_ai_message(
+                        msg,
+                        include_tool_calls=include_tool_calls,
+                    )
+                    for provider_event in events:
+                        yield provider_event
+                    result_text += text_delta
+                    total_input_tokens += in_tok
+                    total_output_tokens += out_tok
+
+                elif msg.type in ("tool", "ToolMessageChunk"):
+                    for event in flush_pending_tool_calls():
+                        yield event
+                    tool_name = getattr(msg, "name", "") or ""
+                    result_type = (
+                        "error" if getattr(msg, "status", "success") == "error" else "result"
+                    )
+                    call_id = getattr(msg, "tool_call_id", "") or ""
+                    tool_result_event = ToolResultEvent(
+                        output=stringify(msg.content),
+                        call_id=call_id,
+                    )
+                    if inspection_middleware is None:
+                        yield tool_result_event
+                    else:
+                        pending_tool_results.append(
+                            (tool_name, result_type, call_id, msg.content, tool_result_event)
+                        )
+            for event in flush_pending_tool_calls():
+                yield event
+        finally:
+            await _close_model_clients(chat_model)
+            if classifier_model is not None:
+                await _close_model_clients(classifier_model)
 
         if schema_model is not None:
             structured, in_tok, out_tok = await _shape_structured_output(

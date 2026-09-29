@@ -218,6 +218,9 @@ class TestLoadBatchE2EConfig:
     def test_openai_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("E2E_PROVIDER", "openai-agents")
         monkeypatch.delenv("OPENAI_MODEL", raising=False)
+        monkeypatch.delenv("LIGHTSPEED_MCP_SERVERS", raising=False)
+        monkeypatch.delenv("LIGHTSPEED_REASONING_CONFIG", raising=False)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
 
         expected_secret = resolve_llm_secret("openai-agents")
         config = load_batch_e2e_config()
@@ -225,6 +228,11 @@ class TestLoadBatchE2EConfig:
         assert config.llm_secret == expected_secret
         assert config.model == "gpt-5-mini"
         assert config.verify_full_fixtures is False
+        assert config.job_env == {
+            "LIGHTSPEED_TLS_PROFILE": "IntermediateType",
+            "LIGHTSPEED_TLS_MIN_VERSION": "VersionTLS12",
+            "LIGHTSPEED_TLS_CIPHER_SUITES": '["ECDHE-RSA-AES128-GCM-SHA256"]',
+        }
 
     def test_anthropic_vertex_maps_to_vertex_provider(
         self, monkeypatch: pytest.MonkeyPatch
@@ -344,6 +352,28 @@ class TestBuildJobSpec:
 
         assert self._env(job)["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"] == "2"
 
+    def test_passes_tls_policy_to_job(self) -> None:
+        job = _build_job_spec(
+            self._config(
+                job_env={
+                    "LIGHTSPEED_TLS_PROFILE": "IntermediateType",
+                    "LIGHTSPEED_TLS_MIN_VERSION": "VersionTLS12",
+                    "LIGHTSPEED_TLS_CIPHER_SUITES": '["ECDHE-RSA-AES128-GCM-SHA256"]',
+                }
+            ),
+            "job-name",
+            "input-cm",
+            {"app": "test"},
+            "run-uid",
+            "analysis",
+        )
+
+        env = self._env(job)
+
+        assert env["LIGHTSPEED_TLS_PROFILE"] == "IntermediateType"
+        assert env["LIGHTSPEED_TLS_MIN_VERSION"] == "VersionTLS12"
+        assert env["LIGHTSPEED_TLS_CIPHER_SUITES"] == '["ECDHE-RSA-AES128-GCM-SHA256"]'
+
     def test_job_env_overrides_execution_limit_defaults(self) -> None:
         job = _build_job_spec(
             self._config(
@@ -459,6 +489,7 @@ class TestConfigMapJobOwner:
             "ns",
             cm,
         )
+        assert cm.metadata.owner_references is not None
         owner = cm.metadata.owner_references[0]
         assert owner.api_version == "batch/v1"
         assert owner.kind == "Job"

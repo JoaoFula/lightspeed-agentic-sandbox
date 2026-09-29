@@ -35,6 +35,8 @@ else:
 
 from lightspeed_agentic.skills import has_skills
 from lightspeed_agentic.types import (
+    MAX_TOOL_RETURN_CHARS,
+    TOOL_RETURN_PREVIEW_CHARS,
     AgentProvider,
     ContentBlockStopEvent,
     ProviderEvent,
@@ -50,18 +52,34 @@ from lightspeed_agentic.types import (
 logger = logging.getLogger(__name__)
 
 
-_OPENAI_HOSTS = ("api.openai.com",)
+def _make_strict(schema: dict[str, Any]) -> dict[str, Any]:
+    """Add OpenAI strict-schema requirements recursively without mutating input."""
+    if not isinstance(schema, dict):
+        return schema
+    schema = dict(schema)
+    if schema.get("type") == "object" and "properties" in schema:
+        schema["additionalProperties"] = False
+        schema["required"] = list(schema["properties"].keys())
+        schema["properties"] = {k: _make_strict(v) for k, v in schema["properties"].items()}
+    if "items" in schema and isinstance(schema["items"], dict):
+        schema["items"] = _make_strict(schema["items"])
+    if "oneOf" in schema and isinstance(schema["oneOf"], list):
+        logger.info("Converting oneOf to anyOf for OpenAI compatibility")
+        schema.setdefault("anyOf", []).extend(schema.pop("oneOf"))
+    for keyword in ("anyOf", "allOf"):
+        if keyword in schema and isinstance(schema[keyword], list):
+            schema[keyword] = [_make_strict(item) for item in schema[keyword]]
+    if "not" in schema and isinstance(schema["not"], dict):
+        schema["not"] = _make_strict(schema["not"])
+    for defs_key in ("$defs", "definitions"):
+        if defs_key in schema and isinstance(schema[defs_key], dict):
+            schema[defs_key] = {
+                name: _make_strict(value) for name, value in schema[defs_key].items()
+            }
+    return schema
 
-# Models that support json_schema response format (structured output with strict mode)
-_MODELS_WITH_JSON_SCHEMA = {
-    "gpt-4",
-    "gpt-4-turbo",
-    "gpt-4-turbo-preview",
-    "gpt-4-turbo-2024-04-09",
-    "gpt-4o",
-    "gpt-4o-2024-08-06",
-    "gpt-4o-2024-11-20",
-}
+
+_OPENAI_HOSTS = ("api.openai.com",)
 
 
 def _is_native_openai() -> bool:
@@ -77,24 +95,6 @@ def _is_native_openai() -> bool:
         return False
 
 
-def _model_supports_json_schema(model: str) -> bool:
-    """Check if a model supports json_schema response format (structured output).
-
-    Args:
-        model: Model identifier (e.g., 'gpt-4o', 'gpt-4-turbo')
-
-    Returns:
-        True if model supports json_schema, False otherwise.
-        For custom endpoints (non-OpenAI), returns True (assume compatibility).
-    """
-    if not _is_native_openai():
-        # Custom endpoints (vLLM, etc.) - assume they support json_schema
-        # if user is requesting it. Failures will be caught at API call time.
-        return True
-    # For native OpenAI, check against known compatible models
-    return any(model.startswith(m) for m in _MODELS_WITH_JSON_SCHEMA)
-
-
 _openai_initialized = False
 
 
@@ -108,7 +108,7 @@ class _RawJsonSchema(AgentOutputSchemaBase):
     """
 
     def __init__(self, schema: dict[str, Any], is_native: bool) -> None:
-        self._schema = schema
+        self._schema = _make_strict(schema) if is_native else schema
         self._is_native = is_native
 
     def is_plain_text(self) -> bool:
@@ -260,11 +260,14 @@ class OpenAIProvider(AgentProvider):
         _ensure_openai_init()
 
         if self._client is None:
-            from openai import AsyncOpenAI
+            from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+
+            from lightspeed_agentic.tls import get_ssl_context
 
             self._client = AsyncOpenAI(
                 base_url=os.environ.get("OPENAI_BASE_URL"),
                 api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"),
+                http_client=DefaultAsyncHttpxClient(verify=get_ssl_context()),
             )
 
         from agents import (
@@ -272,6 +275,7 @@ class OpenAIProvider(AgentProvider):
             RunItemStreamEvent,
             Runner,
         )
+        from agents.extensions import ToolOutputTrimmer
         from agents.items import ToolCallItem, ToolCallOutputItem
         from agents.run_config import RunConfig, SandboxRunConfig
         from agents.sandbox import SandboxAgent
@@ -333,39 +337,38 @@ class OpenAIProvider(AgentProvider):
         # Manifest root is cwd's parent (/app) so shell commands can reach workspace
         manifest = _build_manifest(str(Path(options.cwd).parent))
 
-        # Setup MCP servers (gracefully degrade if unavailable)
+        # Setup MCP servers. Once admitted, the full set must remain available.
         mcp_manager = None
         mcp_servers_for_agent: list[Any] = []
         if options.mcp_servers:
+            from agents.mcp import MCPServerManager
+
+            from lightspeed_agentic.mcp import to_openai_mcp_servers
+
+            mcp_servers_list = to_openai_mcp_servers(options.mcp_servers)
+            if not mcp_servers_list:
+                raise RuntimeError("MCP server conversion produced no servers")
+
+            mcp_manager = MCPServerManager(mcp_servers_list)
+            entered = False
             try:
-                from agents.mcp import MCPServerManager
-
-                from lightspeed_agentic.mcp import to_openai_mcp_servers
-
-                mcp_servers_list = to_openai_mcp_servers(options.mcp_servers)
-                if not mcp_servers_list:
-                    logger.warning("MCP servers configured but conversion produced no servers")
-                else:
-                    mcp_manager = MCPServerManager(mcp_servers_list)
-                    await mcp_manager.__aenter__()
-                    # Validate manager initialized properly
-                    if not hasattr(mcp_manager, "active_servers"):
-                        logger.warning("MCPServerManager missing active_servers attribute")
-                        mcp_manager = None
-                    else:
-                        active_servers = mcp_manager.active_servers
-                        active_count = len(active_servers) if active_servers else 0
-                        if active_count == 0:
-                            logger.warning("MCPServerManager initialized but no active servers")
-                        else:
-                            mcp_servers_for_agent = list(active_servers)
-                            logger.debug(f"Initialized {active_count} MCP servers")
-            except Exception as e:
-                logger.warning(
-                    "Failed to initialize MCP servers, continuing without them: "
-                    f"{type(e).__name__}: {e}"
-                )
+                await mcp_manager.__aenter__()
+                entered = True
+                active_servers = getattr(mcp_manager, "active_servers", None) or []
+                active_count = len(active_servers)
+                expected_count = len(mcp_servers_list)
+                if active_count != expected_count:
+                    raise RuntimeError(
+                        f"MCP manager initialized {active_count} of "
+                        f"{expected_count} admitted servers"
+                    )
+                mcp_servers_for_agent = list(active_servers)
+                logger.debug("Initialized %d MCP servers", active_count)
+            except Exception:
+                if entered:
+                    await mcp_manager.__aexit__(None, None, None)
                 mcp_manager = None
+                raise
 
         try:
             if not is_native and mcp_servers_for_agent and function_tools_list is not None:
@@ -389,14 +392,6 @@ class OpenAIProvider(AgentProvider):
                     options.reasoning_config
                 )
 
-            # Validate model supports structured output
-            if options.output_schema and not _model_supports_json_schema(options.model):
-                raise ValueError(
-                    f"Model {options.model} does not support json_schema response format. "
-                    "Only models with structured output support (gpt-4, gpt-4o, etc.) are "
-                    "compatible."
-                )
-
             # Set output_type for structured output
             if options.output_schema:
                 agent_kwargs["output_type"] = _RawJsonSchema(
@@ -408,6 +403,10 @@ class OpenAIProvider(AgentProvider):
             run_config = RunConfig(
                 sandbox=SandboxRunConfig(
                     client=UnixLocalSandboxClient(),
+                ),
+                call_model_input_filter=ToolOutputTrimmer(
+                    max_output_chars=MAX_TOOL_RETURN_CHARS,
+                    preview_chars=TOOL_RETURN_PREVIEW_CHARS,
                 ),
             )
 

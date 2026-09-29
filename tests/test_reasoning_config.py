@@ -1,5 +1,8 @@
 """Tests for reasoning config parsing and provider adapter wiring."""
 
+# The test doubles intentionally model optional SDKs without complete type stubs.
+# mypy: ignore-errors
+
 from __future__ import annotations
 
 import sys
@@ -8,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from lightspeed_agentic.mcp import AdmittedMCPProviderServer
 from lightspeed_agentic.types import ProviderQueryOptions
 
 
@@ -32,6 +36,16 @@ class TestGeminiReasoningConfig:
         assert not hasattr(gen_config, "thinking_config") or gen_config.thinking_config is None
 
     @pytest.mark.asyncio
+    async def test_uses_shared_tls_context_without_run_config_http_options(
+        self,
+    ) -> None:
+        gen_config = await self._run_gemini(reasoning_config=None)
+
+        http_options = gen_config.model_kwargs["client_kwargs"]["http_options"]
+        assert "verify" in http_options["async_client_args"]
+        assert "http_options" not in gen_config.run_config
+
+    @pytest.mark.asyncio
     async def test_thinking_config_keys(self) -> None:
         """Recognized keys are mapped to ThinkingConfig."""
         reasoning = {"thinking_budget": 2048, "include_thoughts": True}
@@ -50,8 +64,47 @@ class TestGeminiReasoningConfig:
         assert tc.thinking_budget == 1024
         assert tc.unknown_param == "x"
 
+    @pytest.mark.asyncio
+    async def test_mcp_tools_are_materialized_and_toolset_is_closed(self) -> None:
+        mcp_tool = MagicMock()
+        mcp_tool.name = "get_pod"
+        toolset = MagicMock()
+        toolset.get_tools = AsyncMock(return_value=[mcp_tool])
+        toolset.close = AsyncMock()
+        server = AdmittedMCPProviderServer(
+            name="test-server",
+            url="https://mcp.example.com",
+            timeout=30,
+            allowed_tool_names=("get_pod",),
+        )
+
+        gen_config = await self._run_gemini(mcp_servers=[server], mcp_toolsets=[toolset])
+
+        assert mcp_tool in gen_config.agent_tools
+        assert toolset not in gen_config.agent_tools
+        toolset.get_tools.assert_awaited_once_with()
+        toolset.close.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_mcp_discovery_failure_propagates_and_closes_toolset(self) -> None:
+        toolset = MagicMock()
+        toolset.get_tools = AsyncMock(side_effect=RuntimeError("discovery failed"))
+        toolset.close = AsyncMock()
+        server = AdmittedMCPProviderServer(
+            name="test-server",
+            url="https://mcp.example.com",
+            timeout=30,
+            allowed_tool_names=("get_pod",),
+        )
+
+        with pytest.raises(RuntimeError, match="discovery failed"):
+            await self._run_gemini(mcp_servers=[server], mcp_toolsets=[toolset])
+
+        toolset.get_tools.assert_awaited_once_with()
+        toolset.close.assert_awaited_once_with()
+
     @staticmethod
-    async def _run_gemini(reasoning_config=None):
+    async def _run_gemini(reasoning_config=None, mcp_servers=None, mcp_toolsets=None):
         """Run GeminiProvider.query() and capture the GenerateContentConfig."""
         captured = {}
 
@@ -84,8 +137,10 @@ class TestGeminiReasoningConfig:
         mock_types.ToolConfig = FakeToolConfig
         mock_types.Content = FakeContent
         mock_types.Part = FakePart
+        mock_types.HttpOptions = MagicMock(side_effect=lambda **kwargs: kwargs)
 
         mock_agent_cls = MagicMock()
+        mock_gemini_cls = MagicMock()
         mock_runner = MagicMock()
 
         async def _empty_run(**_kwargs):
@@ -111,6 +166,8 @@ class TestGeminiReasoningConfig:
         agents_mod = ModuleType("google.adk.agents")
         agents_mod.Agent = mock_agent_cls  # type: ignore[attr-defined]
         agents_mod.RunConfig = MagicMock()  # type: ignore[attr-defined]
+        models_mod = ModuleType("google.adk.models")
+        models_mod.Gemini = mock_gemini_cls  # type: ignore[attr-defined]
         run_config_mod = ModuleType("google.adk.agents.run_config")
         run_config_mod.StreamingMode = MagicMock(SSE="sse", NONE="none")  # type: ignore[attr-defined]
         runners_mod = ModuleType("google.adk.runners")
@@ -132,6 +189,7 @@ class TestGeminiReasoningConfig:
             "google.adk": adk_mod,
             "google.adk.agents": agents_mod,
             "google.adk.agents.run_config": run_config_mod,
+            "google.adk.models": models_mod,
             "google.adk.runners": runners_mod,
             "google.adk.sessions": sessions_mod,
             "google.adk.tools": tools_mod,
@@ -139,16 +197,29 @@ class TestGeminiReasoningConfig:
             "google.adk.tools.tool_confirmation": tool_confirm_mod,
         }
 
-        with patch.dict(sys.modules, modules):
+        with (
+            patch.dict(sys.modules, modules),
+            patch(
+                "lightspeed_agentic.mcp.to_gemini_mcp_toolsets",
+                return_value=mcp_toolsets or [],
+            ),
+        ):
             if "lightspeed_agentic.providers.gemini" in sys.modules:
                 del sys.modules["lightspeed_agentic.providers.gemini"]
             from lightspeed_agentic.providers.gemini import GeminiProvider
 
             provider = GeminiProvider()
-            options = _base_options(reasoning_config=reasoning_config)
-            async for _ in provider.query(options):
+            options = _base_options(
+                reasoning_config=reasoning_config,
+                mcp_servers=mcp_servers or [],
+            )
+            events = provider.query(options)
+            async for _ in events:
                 pass
 
+        captured["gen_config"].run_config = agents_mod.RunConfig.call_args.kwargs
+        captured["gen_config"].model_kwargs = mock_gemini_cls.call_args.kwargs
+        captured["gen_config"].agent_tools = mock_agent_cls.call_args.kwargs["tools"]
         return captured["gen_config"]
 
 
@@ -223,7 +294,8 @@ class TestOpenAIReasoningConfig:
             provider = OpenAIProvider()
             provider._client = MagicMock()
             options = _base_options(reasoning_config=reasoning_config)
-            async for _ in provider.query(options):
+            events = provider.query(options)
+            async for _ in events:
                 pass
 
         return captured_kwargs

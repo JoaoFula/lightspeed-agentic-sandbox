@@ -2,7 +2,7 @@
 
 Audience: AI agents (Claude). Precision over narrative.
 
-Cross-references: batch agent invocation → `run-api.md`. Env and build → `configuration.md`.
+Cross-references: batch agent invocation → `run-api.md`. Env and build → `configuration.md`. Provider-neutral product trace events → `data-collection.md`.
 
 ## Behavioral Rules
 
@@ -14,9 +14,9 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 4. **Content block stop (`content_block_stop`).** Signals that a content or tool block has completed; used by logging to flush buffered thinking.
 
-5. **Tool call (`tool_call`).** Carries the tool name and a string representation of inputs (length-truncated per internal adapter limits).
+5. **Tool call (`tool_call`).** Carries the tool name and a complete string representation of inputs. Provider adapters MUST NOT length-truncate this value. `EventLogger` can truncate its developer-log rendering, subject to OLS-3928 rule 6.
 
-6. **Tool result (`tool_result`).** Carries stringified tool output (length-truncated per internal adapter limits).
+6. **Tool result (`tool_result`).** Carries a complete string representation of tool output. Provider adapters MUST NOT length-truncate this value. `EventLogger` can truncate its developer-log rendering, subject to OLS-3928 rule 6.
 
 7. **Result (`result`).** Terminal event: final text payload (may be JSON or plain text depending on structured-output path), input/output token counts, reasoning token count, and response model metadata.
 
@@ -36,7 +36,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 15. **ProviderQueryOptions — `stream`.** When true, adapters that support partial streaming should yield deltas; when false, they may batch. The batch entrypoint does not set this flag from input files.
 
-16. **ProviderQueryOptions — `mcp_servers`.** Optional list of `ResolvedMCPServer` values from `mcp.parse_mcp_servers()`. Each entry carries `name`, `url`, `timeout`, and `headers` as a list of `ResolvedMCPHeader` (`name`, `value`). Adapters MAY convert headers to a dict at the SDK boundary. When non-empty, adapters MUST wire these servers into their SDK's native MCP client mechanism (see rules 31–33). When empty or absent, no MCP servers are configured.
+16. **ProviderQueryOptions — `mcp_servers`.** Optional list of provider-facing projections derived from the canonical admitted MCP server list. Each entry carries only `name`, `url`, `timeout`, resolved `headers`, and admitted tool names. Authentication classification, tool metadata, and RBAC declarations remain outside the provider boundary; batch derives the separate analysis policy projection from the canonical admission result. Adapters MAY convert headers to a dict at the SDK boundary and MAY reconnect or reload SDK tool objects, but they MUST filter those objects by the admitted names without independently admitting or reclassifying tools. When non-empty, adapters MUST initialize each admitted server and wire only admitted tools into their SDK mechanism (see rules 31–33). A reload or initialization error MUST fail the provider query rather than silently omit a server. A successful DeepAgents reload MAY return fewer tools than admission discovered; it MUST still filter out unadmitted tools. When empty or absent, no MCP servers are configured.
 
 17. **ProviderQueryOptions — `reasoning_config`.** Optional dict (JSON object). When present, adapters MUST map it to their SDK's native reasoning/thinking parameters. When absent or `None`, adapters MUST NOT set any reasoning parameters and SDK defaults apply. DeepAgents passes only the `thinking` key through to `ChatAnthropic*`. Gemini constructs `ThinkingConfig(**config)` and OpenAI constructs `Reasoning(**rc)` — extra keys are forwarded to the SDK constructors (not stripped by the adapter); invalid values fail at SDK/API invocation time.
 
@@ -54,7 +54,7 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 24. **Default allowed tools list.** Shared default names: `Bash`, `Read`, `Glob`, `Grep`, `Skill`. `run_agent_query()` always passes this list unless a future contract exposes overrides. [PLANNED: OLS-3033]
 
-25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text.
+25. **Event logging.** A phase-tagged logger buffers `thinking_delta` events, flushes when buffer size exceeds an internal threshold or on `content_block_stop` or tool/result events, and logs truncated thinking. Tool calls and results are logged with separate input/output truncation caps. The `result` event logs the combined token count and truncated final text. [PLANNED: OLS-3928] DeepAgents MUST NOT log tool arguments or inspected tool-result content. It can log only controlled inspection fields and safe tool metadata.
 
 26. **Stringifying tool I/O.** Non-string tool arguments and results are JSON-serialized for events when the SDK exposes structured objects.
 
@@ -74,11 +74,11 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 30. **[Removed]** *(Claude adapter was removed in OLS-3500; MCP for Anthropic models is now handled by the DeepAgents adapter — see rule 33.)*
 
-31. **MCP — Gemini.** When `mcp_servers` is non-empty, the Gemini adapter MUST create `McpToolset` instances with `StreamableHTTPConnectionParams` for each server (including resolved headers) and add them to the agent's `tools` list alongside existing tools.
+31. **MCP — Gemini.** When admitted `mcp_servers` is non-empty, the Gemini adapter MUST create `McpToolset` instances with `StreamableHTTPConnectionParams` for each admitted server, including resolved headers, and apply the admitted tool-name filter before the toolset is exposed to the model. If the SDK cannot enforce that filter or materialize every admitted server before model exposure, the provider query MUST fail.
 
-32. **MCP — OpenAI.** When `mcp_servers` is non-empty, the OpenAI adapter MUST create `MCPServerStreamableHttp` instances for each server (with resolved headers) and pass them to the agent's `mcp_servers` parameter.
+32. **MCP — OpenAI.** When admitted `mcp_servers` is non-empty, the OpenAI adapter MUST create `MCPServerStreamableHttp` instances for each admitted server, including resolved headers, and apply the admitted tool-name filter through the SDK's native mechanism before passing them to the agent. Native and OpenAI-compatible paths MUST preserve the complete admitted server set. Conversion failure, manager initialization failure, or an incomplete active-server set MUST fail the provider query rather than continue without MCP tools.
 
-33. **MCP — DeepAgents.** When `mcp_servers` is non-empty, the DeepAgents adapter MUST load MCP tools via `langchain-mcp-adapters` `MultiServerMCPClient` and pass them to `create_deep_agent(tools=...)` where they merge with built-in harness tools.
+33. **MCP — DeepAgents.** When admitted `mcp_servers` is non-empty, the DeepAgents adapter MUST load MCP tools via `langchain-mcp-adapters` `MultiServerMCPClient`, filter the returned tool objects using the admitted names, and pass only those tools to `create_deep_agent(tools=...)` where they merge with built-in harness tools. It MUST NOT pass an unfiltered MCP server to the agent. A reload error for an admitted server MUST fail the provider query rather than silently remove that server. If a successful reload returns fewer tools than were admitted, the adapter MAY continue with the returned admitted tools; it MUST NOT expose newly returned unadmitted tools.
 
 34. **Reasoning — DeepAgents.** When `reasoning_config` is present, the DeepAgents adapter MUST pass the `thinking` key from the config to the `ChatAnthropic*` model constructor on the agent pass unchanged. Structured-output shaping (rule 22) MUST use a separate model instance without thinking.
 
@@ -91,15 +91,49 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 38. **SDK-delegated short-lived tokens.** For providers that authenticate with short-lived access tokens derived from a long-lived credential, the sandbox mounts only the **long-lived** credential and delegates all short-lived token minting and refresh to the provider SDK's own credential object. The sandbox MUST NOT implement a token cache, refresh timer, or manual expiry/leeway logic. Because the sandbox reads the long-lived credential once at startup (one-shot batch process, no credential hot-reload), only the short-lived token is refreshed in-run — which is all a single run needs. Instances:
 
     | Provider | Long-lived credential (mounted) | SDK that mints/refreshes the short-lived token |
-    |---|---|---|
+    | --- | --- | --- |
     | Vertex (existing) | `GOOGLE_APPLICATION_CREDENTIALS` service-account key | google-auth |
     | Azure Entra ID (OLS-3050) | `client_id` / `tenant_id` / `client_secret` | `azure.identity` `ClientSecretCredential` via `azure_ad_token_provider` (rule 29) |
     | AWS Bedrock (OLS-4092) | `aws_access_key_id` / `aws_secret_access_key` + optional `role_arn` | `botocore` credential-provider chain: with `role_arn` it performs STS assume-role and refreshes the short-lived credentials (see `configuration.md` rule 9b). The Anthropic-on-Bedrock model path is unchanged. |
 
+### Agentic product trace normalization
+
+39. [PLANNED: OLS-3569] Provider adapters MUST expose the complete provider-neutral completion, reasoning, tool call/result, explicit skill load/use, and terminal-result values required by `data-collection.md`. Provider-specific SDK object shapes MUST stop at the adapter boundary and MUST NOT create alternate content-event names.
+
+40. [PLANNED: OLS-3569] Tool input/result and assistant/reasoning values retained for content trace events MUST NOT be length-truncated. The existing `EventLogger` can truncate its developer-log rendering. For DeepAgents tool calls and results, OLS-3928 rule 6 prohibits payload content in that rendering.
+
+41. [PLANNED: OLS-3569] Every adapter's terminal `result` MUST carry the exact final response, requested-model fallback or actual response model, input tokens, output tokens, and reasoning tokens. When an SDK does not expose the actual model or a token category, the adapter MUST use the requested model or zero respectively; it MUST NOT omit the field or invent usage.
+
+42. [PLANNED: OLS-3569] Gemini MUST retain terminal text from non-streamed ADK responses and pass it through the terminal `result`; it MUST NOT leave the final value empty because the text arrived in a non-partial event. Gemini MUST also expose response-model and token metadata under rule 41.
+
+43. [PLANNED: OLS-3569] DeepAgents structured output MUST preserve the first agent pass's ordered completion, reasoning, tool, and skill signals and pass the second tool-free shape result as terminal `result` text. Usage totals MUST include both passes, and response-model fallback follows rule 41.
+
+44. [PLANNED: OLS-3569] OpenAI MUST serialize `result.final_output` as the terminal `result` value and expose model and token metadata under rule 41, including reasoning tokens from output-token details when available.
+
+45. [PLANNED: OLS-3569] Adapters MUST emit skill-loaded and skill-used signals only when their SDK or sandbox integration explicitly exposes those facts. They MUST include identity and all available content or metadata without redaction or truncation and MUST NOT infer skill use from model text or generic tool output.
+
+46. [PLANNED: OLS-3569] Adapters MUST preserve the same tool name and stable call ID across each tool call/result pair and the corresponding operational tool span, retain complete input and output, and normalize result status to `ok` or `error`. When the SDK omits a call ID, the adapter MUST generate one stable ID for the pair.
+
+### Tool-Result Prompt-Injection Inspection [PLANNED: OLS-3928]
+
+ 1. **Normative source.** The sandbox MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
+
+ 2. **Runtime coverage.** The guarded adapter is DeepAgents only. Gemini and OpenAI adapters remain unchanged. Selection of an unguarded adapter MUST NOT cause a runtime warning.
+
+ 3. **Interception point.** DeepAgents middleware, or an equivalent tool wrapper, MUST inspect each effective model-visible result. Inspection occurs after artifact offload and before delivery to the main model or `ToolResultEvent` emission.
+
+ 4. **Model integration.** The middleware MUST construct the isolated classifier from the resolved DeepAgents model configuration. It MUST omit the main agent's reasoning configuration.
+
+ 5. **Local paths.** The interception paths include normal results, tool-generated errors, shell output, MCP output, file reads, and search results. They also include offload previews and references. Each later model-visible artifact read or search result MUST pass through the same middleware.
+
+ 6. **Event boundary.** For DeepAgents tool calls and results, the adapter MUST send only controlled, payload-free metadata to `EventLogger`. After a pass, the adapter MUST send the complete normalized `ToolResultEvent` to `AuditLogger`. This path retains the full result required by rules 39–46. A failed inspection MUST raise `ToolResultSafetyInspectionFailed` and send no result event to either logger.
+
+ 7. **Disabled behavior.** When `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` is false, the middleware MUST skip inspection calls and inspection-based termination. The main-system safety instruction remains active for every provider.
+
 ## Configuration Surface
 
 | Mechanism | Purpose |
-|-----------|---------|
+| ----------- | --------- |
 | `ProviderQueryOptions.*` | All option fields listed above (set by router, not raw HTTP for most fields). |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Gemini: Vertex vs consumer API behavior and tool mix. Set internally by configuration mapping (see `configuration.md` rule 2), not by operator. |
 | `OPENAI_BASE_URL` | OpenAI-compatible API endpoint override. Set internally by configuration mapping, not by operator. |
@@ -119,7 +153,10 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 
 ## Verification
 
-- Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output strategy when thinking is configured
+- Unit: [test_run_agent.py](../../../tests/test_run_agent.py) — event stream, structured output, context prefix; [test_deepagents.py](../../../tests/test_deepagents.py) — DeepAgents structured output and admitted-name filtering; [test_mcp.py](../../../tests/test_mcp.py) — canonical admission projections and Gemini/OpenAI native filters; [test_openai_schema.py](../../../tests/test_openai_schema.py) — OpenAI complete-set initialization and fail-closed behavior
+- [PLANNED: OLS-3928] Fast mock tests verify contract conformance, offloaded read paths, disabled inspection, and controlled sandbox failure.
+- [PLANNED: OLS-3928] Integration tests verify inspection before `ToolResultEvent` emission. They verify payload-free `EventLogger` records and full-fidelity `AuditLogger` events after a pass. They also verify rejected-event suppression and controlled termination without a Result CR.
+- The cross-repository real-model corpus and reporting requirements are owned by `openshift/ols/.ai/spec/what/tool-result-inspection.md`.
 - Live batch: [skills.feature](../../../tests/e2e/features/skills.feature), [structured_output.feature](../../../tests/e2e/features/structured_output.feature), [mcp.feature](../../../tests/e2e/features/mcp.feature), [reasoning_config.feature](../../../tests/e2e/features/reasoning_config.feature)
 - Harness helpers: [test_batch_e2e_helpers.py](../../../tests/test_batch_e2e_helpers.py) (no cluster)
 - [PLANNED: OLS-3472] Gemma 4 support assumes that the selected vLLM deployment exposes the OpenAI-compatible operations required by the existing adapter and product-e2e core scenarios.
@@ -131,4 +168,4 @@ Cross-references: batch agent invocation → `run-api.md`. Env and build → `co
 - Align operator-passed `allowedTools` and `llm` with `ProviderQueryOptions`. [PLANNED: OLS-3033]
 - Wire operator-resolved `Agent.spec.maxTurns` through `LIGHTSPEED_AGENT_MAX_TURNS` to each provider-native iteration limit. [PLANNED: OLS-3743]
 - DeepAgents: token-level streaming via `astream_events()` instead of batch `stream_mode="messages"`. [PLANNED: OLS-3500]
-- DeepAgents: `allowed_tools` filtering at `create_deep_agent(tools=...)` construction. [PLANNED: OLS-3500]
+- [PLANNED: OLS-3928] DeepAgents-only inspection of every model-visible tool result and error.

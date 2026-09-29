@@ -21,12 +21,21 @@ from lightspeed_agentic.config import (
     parse_agent_timeout,
     parse_max_turns,
     parse_reasoning_config,
+    parse_tool_output_inspection_enabled,
     resolve_router_model,
     resolve_sdk,
     resolve_startup_model,
 )
 from lightspeed_agentic.factory import create_provider
-from lightspeed_agentic.mcp import MCPConfigError, parse_mcp_servers
+from lightspeed_agentic.inspection.errors import ToolResultSafetyInspectionFailed
+from lightspeed_agentic.mcp import (
+    MCPConfigError,
+    MCPPolicyEntry,
+    discover_and_admit_mcp_servers,
+    parse_mcp_servers,
+    render_mcp_policy_context,
+    split_admitted_mcp_servers,
+)
 from lightspeed_agentic.publish_results.publish import (
     PublishError,
     publish_agent_result,
@@ -35,6 +44,7 @@ from lightspeed_agentic.publish_results.publish import (
 )
 from lightspeed_agentic.readiness import run_readiness_checks
 from lightspeed_agentic.run_agent import run_agent_query
+from lightspeed_agentic.tls import configure_tls  # pyright: ignore[reportMissingImports]
 from lightspeed_agentic.tracing import init_tracer, otel_runtime_enabled, shutdown_tracer
 
 logger = logging.getLogger(__name__)
@@ -131,7 +141,8 @@ def main() -> None:
     and exits non-zero. Agent failure still publishes a Result CR and exits 0.
     """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    logger.info("batch sandbox starting")
+    build_version = os.environ.get("LIGHTSPEED_BUILD_VERSION", "unknown").strip() or "unknown"
+    logger.info("batch sandbox starting build=%s", build_version)
 
     try:
         inputs = read_batch_inputs()
@@ -147,6 +158,9 @@ def main() -> None:
         sys.exit(1)
         return
 
+    agenticrun_uid = os.environ.get("LIGHTSPEED_AGENTICRUN_UID", "").strip()
+    agenticrun_phase = os.environ.get("LIGHTSPEED_AGENTICRUN_STEP", "").strip()
+
     target_ns = _pick_namespace(inputs.context)
     logger.info(
         "step=%s query_len=%d target_ns=%s kind=%s",
@@ -158,11 +172,13 @@ def main() -> None:
 
     otel_active = False
     try:
+        configure_tls()
         sdk = resolve_sdk()
         reasoning_config = parse_reasoning_config()
         mcp_servers = parse_mcp_servers()
         agent_timeout_seconds = parse_agent_timeout()
         agent_max_turns = parse_max_turns()
+        tool_output_inspection_enabled = parse_tool_output_inspection_enabled()
         readiness_ok, readiness_checks = run_readiness_checks(sdk)
         if not readiness_ok:
             write_termination_log(_format_readiness_failure(readiness_checks))
@@ -170,13 +186,18 @@ def main() -> None:
             return
 
         if otel_runtime_enabled():
-            init_tracer(agenticrun_phase=step)
+            init_tracer(
+                agenticrun_uid=agenticrun_uid,
+                agenticrun_phase=agenticrun_phase,
+            )
             otel_active = True
+
+        admitted_mcp_servers = asyncio.run(discover_and_admit_mcp_servers(mcp_servers))
+        provider_mcp_servers, mcp_policies = split_admitted_mcp_servers(admitted_mcp_servers)
         provider = create_provider(sdk.name)
         startup_model = resolve_startup_model(sdk.name)
         audit_enabled = os.environ.get("LIGHTSPEED_AUDIT_ENABLED", "").strip().lower() == "true"
         capture_content = _resolve_capture_content(audit_enabled)
-        agenticrun_uid = os.environ.get("LIGHTSPEED_AGENTICRUN_UID", "").strip()
         skills_dir = os.environ.get("LIGHTSPEED_SKILLS_DIR", DEFAULT_SKILLS_DIR)
         model = resolve_router_model(provider.name, startup_model)
 
@@ -188,7 +209,11 @@ def main() -> None:
             capture_content,
         )
 
-        system_prompt = inputs.system_prompt or DEFAULT_SYSTEM_PROMPT
+        system_prompt = _build_system_prompt(
+            inputs.system_prompt or DEFAULT_SYSTEM_PROMPT,
+            step=step,
+            mcp_policies=mcp_policies,
+        )
         traceparent = _resolve_traceparent()
         started_at = datetime.now(UTC)
         agent_result = asyncio.run(
@@ -202,13 +227,14 @@ def main() -> None:
                 model=model,
                 max_turns=agent_max_turns,
                 timeout_seconds=agent_timeout_seconds,
-                mcp_servers=mcp_servers,
+                mcp_servers=provider_mcp_servers,
                 reasoning_config=reasoning_config,
+                tool_output_inspection_enabled=tool_output_inspection_enabled,
                 audit_enabled=audit_enabled,
                 capture_content=capture_content,
                 agenticrun_uid=agenticrun_uid,
                 traceparent=traceparent,
-                step=step,
+                step=agenticrun_phase,
             )
         )
 
@@ -223,6 +249,10 @@ def main() -> None:
             timed_out=agent_result.timed_out,
         )
         logger.info("status updated — exiting 0")
+    except ToolResultSafetyInspectionFailed:
+        write_termination_log("ToolResultSafetyInspectionFailed")
+        sys.exit(1)
+        return
     except MCPConfigError as exc:
         write_termination_log(str(exc))
         sys.exit(1)
@@ -243,6 +273,21 @@ def main() -> None:
     finally:
         if otel_active:
             shutdown_tracer()
+
+
+def _build_system_prompt(
+    base_prompt: str,
+    *,
+    step: str,
+    mcp_policies: list[MCPPolicyEntry],
+) -> str:
+    """Add admitted MCP policy guidance only to the analysis prompt."""
+    if step != "analysis":
+        return base_prompt
+    policy_context = render_mcp_policy_context(mcp_policies)
+    if not policy_context:
+        return base_prompt
+    return f"{base_prompt}\n\n{policy_context}"
 
 
 def _format_readiness_failure(checks: dict[str, str]) -> str:

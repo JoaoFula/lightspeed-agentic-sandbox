@@ -154,6 +154,14 @@ class TestInitTracer:
         assert "agenticrun.phase" not in attrs
         assert attrs["service.name"] == "lightspeed-agentic-sandbox"
 
+    def test_log_filter_does_not_invent_missing_phase(self) -> None:
+        record = logging.LogRecord("test", logging.INFO, __file__, 1, "message", (), None)
+        stamp = _tracing_mod._AgenticRunFilter(agenticrun_uid="run-uid")
+
+        assert stamp.filter(record) is True
+        assert record.__dict__["agenticrun.uid"] == "run-uid"
+        assert "agenticrun.phase" not in record.__dict__
+
     def test_logging_handler_attached_when_endpoint_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

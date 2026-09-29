@@ -29,11 +29,11 @@ class AuditLogger:
     ) -> None:
         """Configure audit emission for one agent run.
 
-        ``phase`` is the workflow step (``analysis``, ``execution``, …) from
-        ``result-template.kind``. When ``enabled`` is false, buffers are cleared
-        without emitting span events.
+        ``phase`` is the operator-provided AgenticRun phase from
+        ``LIGHTSPEED_AGENTICRUN_STEP``. When ``enabled`` is false, buffers are
+        cleared without emitting span events.
         """
-        self._phase = phase
+        self._agenticrun_phase = phase
         self._model = model
         self._provider = provider
         self._enabled = enabled
@@ -72,6 +72,8 @@ class AuditLogger:
                 }
                 if self._agenticrun_uid:
                     attrs["agenticrun.uid"] = self._agenticrun_uid
+                if self._agenticrun_phase:
+                    attrs["agenticrun.phase"] = self._agenticrun_phase
                 if event.input:
                     attrs["tool.input"] = event.input
                 span = self._tracer.start_span(

@@ -2,7 +2,7 @@
 
 Audience: AI agents (Claude). Precision over narrative.
 
-Cross-references: provider behavior and events → `provider-contract.md`. Env defaults → `configuration.md`. Result CR publishing → `publish_results/` in `how/project-structure.md`.
+Cross-references: provider behavior and events → `provider-contract.md`. Env defaults → `configuration.md`. Result CR publishing → `publish_results/` in `how/project-structure.md`. Product trace content → `data-collection.md`.
 
 The sandbox runs as a one-shot batch process (OLS-3066). There is **no HTTP server** — no FastAPI routes, no `/health` or `/ready` probes, no inbound connections.
 
@@ -80,15 +80,23 @@ The agent returns structured JSON via `run_agent_query()` (formerly HTTP `RunRes
 
 23. **Sandbox failure path.** When input cannot be read, readiness checks fail, Kubernetes create/update fails, or any other infrastructure error occurs, the sandbox MUST write a human-readable message to `/dev/termination-log` (max 4096 bytes) and exit non-zero. The operator reads `pod.status.containerStatuses[].state.terminated.message` — **no Result CR is published** on this path (contrast rules 21–22).
 
+23a. [PLANNED: OLS-3928] Tool-result safety failure handling MUST conform to `openshift/ols/.ai/spec/what/tool-result-inspection.md` and follow the sandbox failure path.
+
+23b. The sandbox MUST write exactly `ToolResultSafetyInspectionFailed` to `/dev/termination-log`, exit nonzero, and publish no Result CR.
+
 24. **Kubernetes API (not `oc`).** Publishing uses the `kubernetes` Python client (`CustomObjectsApi`): `create_namespaced_custom_object` for create (HTTP 409 AlreadyExists tolerated for idempotent retry), then `replace_namespaced_custom_object_status` for status. In a Kubernetes pod (`KUBERNETES_SERVICE_HOST` set), authentication MUST use in-cluster config only; if that fails, the sandbox MUST fail publish (sandbox failure path, rule 23) and MUST NOT fall back to a local kubeconfig file. Outside a cluster (local dev), `kubeconfig` MAY be used when in-cluster config is unavailable. The sandbox MUST NOT shell out to `oc` for Result CR lifecycle.
 
 25. **RBAC.** The sandbox ServiceAccount MUST have `create` and `update` (with `status` subresource) on `AnalysisResult`, `ExecutionResult`, `VerificationResult`, and `EscalationResult` in the AgenticRun namespace.
 
 ### Observability
 
-26. **Tracing.** When `LIGHTSPEED_AUDIT_ENABLED=true` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, `batch.main()` calls `init_tracer()` / `shutdown_tracer()` around the agent run. When both are unset, OTEL providers are not initialized (no exporters, no `LoggingHandler`). `LIGHTSPEED_AGENTICRUN_UID` and `LIGHTSPEED_AGENTICRUN_STEP` stamp spans and bridged OTLP logs when OTEL is active (see `audit-logging.md`). When the operator sets W3C `TRACEPARENT` on the pod, `batch.main()` passes it to `run_agent_query()` so the inference span is a child of the operator phase span. When `TRACEPARENT` is unset, the sandbox generates a new trace ID (graceful degradation).
+26. **Tracing.** When `LIGHTSPEED_AUDIT_ENABLED=true` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, `batch.main()` calls `init_tracer()` / `shutdown_tracer()` around the agent run. When both are absent, OTEL providers are not initialized (no exporters, no `LoggingHandler`). `LIGHTSPEED_AGENTICRUN_UID` and `LIGHTSPEED_AGENTICRUN_STEP` stamp spans and bridged OTLP logs when OTEL is active (see `audit-logging.md`). When the operator sets W3C `TRACEPARENT` on the pod, `batch.main()` passes it to `run_agent_query()` so the inference span is a child of the operator phase span. When `TRACEPARENT` is unset, the sandbox generates a new trace ID (graceful degradation).
 
 27. **Metrics.** Prometheus histograms (`metrics.py`) are recorded in-process during `run_agent_query()` for unit-test verification. The batch entrypoint MUST NOT expose `/metrics` and MUST NOT push or export histograms at shutdown (one-shot pods; use OTLP traces for operational token/duration signals — see `audit-logging.md` rule 19).
+
+### Agentic content tracing
+
+28. [PLANNED: OLS-3569] `run_agent_query()` MUST apply `data-collection.md` when placing effective-input and terminal-output events around provider invocation. That spec is authoritative for the event catalog, full-fidelity content, ordering, correlation, and shared OTLP export; `provider-contract.md` owns adapter normalization and fallbacks.
 
 ## Configuration Surface
 
@@ -110,6 +118,7 @@ The agent returns structured JSON via `run_agent_query()` (formerly HTTP `RunRes
 - Operator may later pass `llm` and `allowedTools` via input or env. [PLANNED: OLS-3033]
 - `system-prompt` file as sole system-instructions carrier. [PLANNED: OLS-3491]
 - [PLANNED: OLS-3743] Replace `LIGHTSPEED_TIMEOUT_MS` with required operator-resolved agent timeout and max-turn limits; publish cooperative timeouts with the distinct `AgentTimeout` reason.
+- [PLANNED: OLS-3928] Treat DeepAgents tool-result inspection failure as a controlled sandbox failure without a Result CR.
 
 ## Verification
 

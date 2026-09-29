@@ -174,7 +174,11 @@ def load_batch_e2e_config() -> BatchE2EConfig:
 
 def _session_job_env() -> dict[str, str]:
     """Env vars forwarded from the pytest host onto every batch Job."""
-    job_env: dict[str, str] = {}
+    job_env: dict[str, str] = {
+        "LIGHTSPEED_TLS_PROFILE": "IntermediateType",
+        "LIGHTSPEED_TLS_MIN_VERSION": "VersionTLS12",
+        "LIGHTSPEED_TLS_CIPHER_SUITES": '["ECDHE-RSA-AES128-GCM-SHA256"]',
+    }
     for key in ("LIGHTSPEED_MCP_SERVERS", "LIGHTSPEED_REASONING_CONFIG", "OPENAI_BASE_URL"):
         raw = os.environ.get(key, "").strip()
         if raw:
