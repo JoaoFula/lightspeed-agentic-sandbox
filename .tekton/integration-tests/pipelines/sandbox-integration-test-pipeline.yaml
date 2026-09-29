@@ -9,7 +9,7 @@ spec:
     Runs sandbox batch BDD integration tests for a single LLM provider on a Konflux
     HyperShift hosted cluster. Installs sandbox e2e fixtures (Result CRDs,
     OTEL, RBAC), syncs LLM credential Secrets, then runs pytest batch Jobs against
-    the SANDBOX_IMAGE from SNAPSHOT and deprovisions the cluster.
+    the SANDBOX_IMAGE from SNAPSHOT.
 
     Triggered per-provider by IntegrationTestScenario CRs:
       sandbox-integration-anthropic-vertex-deepagents,
@@ -266,18 +266,3 @@ spec:
           value: "quay.io/openshift-lightspeed/ols-operator-artifacts"
         - name: artifact-credentials-secret
           value: ols-konflux-artifacts-bot
-    - name: deprovision-ephemeral-cluster
-      taskRef:
-        resolver: git
-        params:
-          - name: url
-            value: https://github.com/openshift/konflux-tasks
-          - name: revision
-            value: main
-          - name: pathInRepo
-            value: tasks/deprovision-ephemeral-cluster/0.1/deprovision-ephemeral-cluster.yaml
-      params:
-        - name: testPlatformClusterClaimName
-          value: $(tasks.provision-ephemeral-cluster.results.testPlatformClusterClaimName)
-        - name: testPlatformClusterClaimNamespace
-          value: $(tasks.provision-ephemeral-cluster.results.testPlatformClusterClaimNamespace)
