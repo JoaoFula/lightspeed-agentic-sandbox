@@ -8,7 +8,7 @@
 #   bash scripts/e2e-containers.sh                  # all three providers (sequential)
 #   bash scripts/e2e-containers.sh openai-agents                    # all e2e tests
 #   bash scripts/e2e-containers.sh openai-agents -k mcp             # pytest args (no --)
-#   OPENAI_MODEL=gpt-4o bash scripts/e2e-containers.sh openai-agents
+#   OPENAI_MODEL=gpt-6-luna bash scripts/e2e-containers.sh openai-agents
 #
 # Model resolution (priority order):
 #   1. OPENAI_MODEL env var (for openai-agents)

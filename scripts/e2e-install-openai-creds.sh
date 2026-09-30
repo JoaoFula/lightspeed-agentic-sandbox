@@ -88,5 +88,5 @@ echo "        name: ${SECRET_NAME}"
 echo
 echo "Provider env for OpenAI:"
 echo "  LIGHTSPEED_PROVIDER=openai"
-echo "  LIGHTSPEED_MODEL=gpt-5-mini    # or your model"
-echo "  OPENAI_MODEL=gpt-5-mini       # kept in sync by config mapping"
+echo "  LIGHTSPEED_MODEL=gpt-6-luna    # or your model"
+echo "  OPENAI_MODEL=gpt-6-luna       # kept in sync by config mapping"
