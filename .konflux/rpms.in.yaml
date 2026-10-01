@@ -2,8 +2,6 @@ packages:
   - git
   - jq
   - wget
-  - nodejs
-  - npm
   - procps-ng
   - iproute
   - bind-utils

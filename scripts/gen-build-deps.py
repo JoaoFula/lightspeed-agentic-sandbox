@@ -14,8 +14,9 @@ This script recursively resolves build-system.requires of the build
 dependencies until no new packages appear (fixed-point).
 
 Usage:
-    python scripts/gen-build-deps.py requirements-build.txt \\
-        requirements.x86_64.txt requirements.aarch64.txt
+    python scripts/gen-build-deps.py .konflux/requirements-build.txt \\
+        .konflux/requirements.hashes.wheel.txt \\
+        .konflux/requirements.hashes.source.txt
 """
 
 from __future__ import annotations

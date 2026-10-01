@@ -24,8 +24,6 @@ reviews:
   # File/path filters — skip generated, lockfiles, and mechanical artifacts
   path_filters:
     - '!uv.lock'
-    - '!requirements.x86_64.txt'
-    - '!requirements.aarch64.txt'
     - '!requirements-build.txt'
     - '!rpms.lock.yaml'
     - '!package-lock.json'
