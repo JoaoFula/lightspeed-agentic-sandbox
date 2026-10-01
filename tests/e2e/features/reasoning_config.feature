@@ -6,7 +6,8 @@ Feature: Reasoning configuration via LIGHTSPEED_REASONING_CONFIG
 
   Scenario: Run succeeds with reasoning configured
     Given the sandbox service is running with reasoning configured
-    When I run the agent with a simple reasoning query
+    And a simple non-skill query has been prepared
+    When I run the agent with the prepared query and no output schema
     Then the run completes successfully
     And success is true
     And the response has a non-empty summary
