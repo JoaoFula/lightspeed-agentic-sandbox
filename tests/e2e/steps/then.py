@@ -11,6 +11,7 @@ from pytest_bdd import then
 
 from tests.e2e.analysis_schemas import ANALYSIS_WITH_COMPONENTS_SCHEMA
 from tests.e2e.analysis_tokens import assert_skill_tokens_in_response
+from tests.e2e.mock_mcp_server import MCP_FAIL_SENTINEL
 from tests.e2e.otel_verify import wait_for_otel_audit_logs, wait_for_otel_traces
 from tests.e2e.run_result import E2ERunResult
 from tests.e2e.skills_fixtures import E2E_TOKEN_REL_PATH
@@ -313,26 +314,12 @@ def assert_summary_contains_namespace_output(bdd_context: dict[str, Any]) -> Non
     )
 
 
-_SHELL_FAILURE_MARKERS = (
-    "exit code 127",
-    "command not found",
-    "local environment",
-)
-
-
 @then("the response summary indicates an MCP tool failure")
 def assert_summary_indicates_mcp_tool_failure(bdd_context: dict[str, Any]) -> None:
-    """Assert failure came from mock-ocp-mcp, not a local shell workaround."""
+    """Assert the summary contains the sentinel returned only by ``fail_probe``."""
     body = bdd_context["response_body"]
     summary = str(body.get("summary", ""))
-    lowered = summary.lower()
-    assert "mock-ocp-mcp" in lowered, (
-        f"summary does not reference mock-ocp-mcp (MCP path likely not used): {body!r}"
+    assert MCP_FAIL_SENTINEL in summary, (
+        f"summary does not contain MCP failure sentinel {MCP_FAIL_SENTINEL!r} "
+        f"(fail_probe was likely not invoked): {body!r}"
     )
-    assert "nonexistent_tool_xyz_999" in lowered, (
-        f"summary does not mention the requested MCP tool name: {body!r}"
-    )
-    for marker in _SHELL_FAILURE_MARKERS:
-        assert marker not in lowered, (
-            f"summary looks like a local shell failure ({marker!r}), not MCP: {body!r}"
-        )

@@ -21,7 +21,7 @@ Feature: MCP server connectivity
     And the response summary contains the sentinel namespace from the tool
 
   Scenario: Agent returns a graceful error envelope when a tool call fails
-    Given an MCP query targeting a nonexistent tool has been prepared
+    Given an MCP query targeting a failing tool has been prepared
     When I run the agent with the prepared schema and query
     Then the batch job completes
     And success is false
