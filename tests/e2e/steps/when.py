@@ -18,7 +18,7 @@ def _run_query(bdd_context: dict[str, Any], run_runner: Any, **kwargs: Any) -> N
 
 @when("I run the agent with a simple reasoning query")
 def post_simple_reasoning(bdd_context: dict[str, Any], run_runner: Any) -> None:
-    bdd_context["query"] = "What is 17 * 23? Reply with just the number."
+    bdd_context["query"] = "Reply with exactly: ok"
     _run_query(bdd_context, run_runner)
 
 

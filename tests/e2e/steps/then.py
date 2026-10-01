@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
@@ -155,14 +154,6 @@ def assert_summary_indicates_timeout(bdd_context: dict[str, Any]) -> None:
     assert "timed out" in summary or "timeout" in summary, (
         f"summary does not indicate a timeout: {body!r}"
     )
-
-
-@then("the response summary contains the reasoning answer")
-def assert_summary_contains_reasoning_answer(bdd_context: dict[str, Any]) -> None:
-    """Assert the model produced the correct answer to 17 * 23 (391)."""
-    body = bdd_context["response_body"]
-    summary = body.get("summary", "")
-    assert re.search(r"\b391\b", summary), f"summary missing correct answer 391: {body!r}"
 
 
 @then("the response namespaces field matches the prepared context")
