@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -23,6 +25,8 @@ from tests.e2e.batch_runner import (
 )
 from tests.e2e.otel_verify import logs_contain_audit_logs_for_run, logs_contain_traces_for_run
 from tests.e2e.skills_fixtures import (
+    E2E_POD_SKILLS_DIR,
+    E2E_POD_SKILLS_SRC_DIR,
     _cm_key_from_rel,
     _rel_from_cm_key,
     skill_materialize_script,
@@ -118,9 +122,36 @@ class TestSkillMaterializeScript:
     def test_copies_from_src_to_skills_root(self) -> None:
         script = skill_materialize_script()
         assert "cp -aL" in script
+        assert "! -name '..*'" in script
         assert "/mnt/e2e-skills-src" in script
         assert "/app/skills" in script
         assert "/app/skills/.agents" in script
+
+    def test_skips_kubelet_configmap_directories(self, tmp_path: Path) -> None:
+        src_root = tmp_path / "src"
+        dest_root = tmp_path / "skills"
+        skill = src_root / "find-token"
+        payload = skill / "..2026_10_01_12_00_00.123456789"
+        (payload / "scripts").mkdir(parents=True)
+        (payload / "SKILL.md").write_text("skill body\n", encoding="utf-8")
+        (payload / "scripts" / "find-token.sh").write_text("echo token\n", encoding="utf-8")
+        (skill / "..data").symlink_to(payload.name)
+        (skill / "SKILL.md").symlink_to(Path("..data") / "SKILL.md")
+        (skill / "scripts").symlink_to(Path("..data") / "scripts")
+
+        script = skill_materialize_script().replace(E2E_POD_SKILLS_SRC_DIR, str(src_root))
+        script = script.replace(E2E_POD_SKILLS_DIR, str(dest_root))
+        subprocess.run(  # noqa: S603
+            ["bash", "-c", script],  # noqa: S607
+            check=True,
+        )
+
+        copied = dest_root / "find-token"
+        assert (copied / "SKILL.md").read_text(encoding="utf-8") == "skill body\n"
+        assert (copied / "scripts" / "find-token.sh").read_text(encoding="utf-8") == "echo token\n"
+        assert not (copied / "SKILL.md").is_symlink()
+        assert not (copied / "scripts").is_symlink()
+        assert [path.name for path in copied.iterdir() if path.name.startswith("..")] == []
 
 
 class TestSkillConfigMapKeys:
