@@ -38,12 +38,11 @@ NESTED_OUTPUT_SCHEMA: dict[str, Any] = {
 ECHO_TOKEN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "success": {"type": "boolean"},
         "summary": {"type": "string"},
         "token": {"type": "string", "minLength": 16, "pattern": "^[0-9a-f]+$"},
         "status": {"type": "string", "enum": ["ok"]},
     },
-    "required": ["success", "summary", "token", "status"],
+    "required": ["summary", "token", "status"],
 }
 
 CONTEXT_NAMESPACES_ECHO_SCHEMA: dict[str, Any] = {

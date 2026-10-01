@@ -172,7 +172,7 @@ def prepare_echo_token(bdd_context: dict[str, Any]) -> None:
         "1. Load the echo-token skill.\n"
         "2. From the skill directory, run: bash scripts/echo-token.sh\n"
         "3. Parse the JSON printed to stdout.\n"
-        "4. Reply with a single JSON object only (no markdown): success=true, "
+        "4. Reply with a single JSON object only (no markdown): "
         "summary containing the token verbatim, token equal to the script token field, "
         "and status equal to the script status field.\n"
         "Do not reply until step 2 exits 0 and prints JSON."
