@@ -62,15 +62,15 @@ google-cloud-vectorsearch==0.11.1 \
 langchain==1.4.2 \
     --hash=sha256:30a27c34cfa0004bf659dcdef488b99a9b90acb08bcc514a5a74264755da536c \
     --hash=sha256:5b476418cacbfb8f0da6e63b3b263eefdcec13b48abd6117565a25728ec10b77
-langchain-anthropic==1.7.4 \
-    --hash=sha256:7d540300665a1c906986e505cdec41204e759f14dbd989f53f0c180d82624b94 \
-    --hash=sha256:eec1178389358eaa4cff4f3dd353f063746b8c61090cffe9236d9035df71e66c
+langchain-anthropic==1.7.5 \
+    --hash=sha256:6016f38e5c4bf12c16ecfa76abf133a978f459f4d2887b8e28435ae1ff00beb3 \
+    --hash=sha256:b21ef0e0c2d6175235a5b7eef4f5f89057df92d42dbfab66920a05605ef7173a
 langchain-aws==1.6.2 \
     --hash=sha256:4755c60ce88fff2b829d96027068b7930f335cd85da41fda061769439c288251 \
     --hash=sha256:df2c15b463c068031af40460dbea6efb7999832263ff6eaec6b99c5f6b291acd
-langchain-core==1.6.4 \
-    --hash=sha256:2f940c83f787676ad4dc651d49d053c7ec34bda5a6afcd224da2863ff53a0b84 \
-    --hash=sha256:c1caae770d991bb6f2376bad791970bf77bb29abd1f15823fa9ea7dbac080fa0
+langchain-core==1.6.6 \
+    --hash=sha256:67616d984c085009be2c381c2efd330d32429a58aebab295b4f51b6573964511 \
+    --hash=sha256:d9a71e312ab7443701238750e04a57aefc037c4f1ec82837c8a1609d9a14a9b1
 langchain-google-genai==4.4.0 \
     --hash=sha256:7871beec56ac07b719f77c46997845db6ff2267b817bffb0f97877053b0895d7 \
     --hash=sha256:8e23a1307bd2158590bbf9d99f1d658fc84a9d9ddb77fb1b372f8875a2bafbbf

@@ -9,9 +9,9 @@ description: >-
 
 # deps-update
 
-This repository uses `uv`, `uv.lock`, and `make requirements` to produce
-`requirements.x86_64.txt` and `requirements.aarch64.txt` for Konflux hermetic
-builds (see `CLAUDE.md` / `AGENTS.md`).
+This repository uses `uv`, `uv.lock`, and `make requirements` (alias for
+`make konflux-requirements`) to produce `.konflux/requirements.hashes.*.txt`
+for Konflux hermetic builds (see `AGENTS.md`).
 
 ## Step 1: Snapshot Current State
 
@@ -47,7 +47,7 @@ uv sync --all-extras
 Capture the output of `uv lock --upgrade` — it lists version changes for the
 commit message and report.
 
-Then regenerate pinned requirements for both architectures:
+Then regenerate Konflux hermetic requirements:
 
 ```bash
 make requirements
@@ -78,7 +78,7 @@ breakage from real regressions.
 git diff --name-only
 ```
 
-**If only** `pyproject.toml`, `uv.lock`, and `requirements.*.txt` changed —
+**If only** `pyproject.toml`, `uv.lock`, and `.konflux/requirements.*` changed —
 you may commit with a clear message after summarizing bumps for the user.
 
 **If source or test files changed** — wait for user acknowledgment before
@@ -87,7 +87,7 @@ committing. Then use **raise-pr** to open the PR.
 Typical commit for deps-only:
 
 ```bash
-git add pyproject.toml uv.lock requirements.x86_64.txt requirements.aarch64.txt
+git add pyproject.toml uv.lock .konflux/requirements.hashes.*.txt .konflux/requirements-build.txt .konflux/requirements.overrides.txt
 git commit -m "chore: bump dependencies"
 ```
 
@@ -95,6 +95,6 @@ git commit -m "chore: bump dependencies"
 
 - Clean tree required at the start of a broad bump.
 - Prefer fix-forward over pinning.
-- Do not hand-edit `requirements.*.txt` — always regenerate via `make requirements`.
+- Do not hand-edit `.konflux/requirements.hashes.*.txt` — always regenerate via `make requirements`.
 - Eval/live tests are optional for a deps PR unless the user asks; default gate
   is `make verify` + `make test`.

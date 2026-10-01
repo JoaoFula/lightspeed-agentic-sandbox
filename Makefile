@@ -58,16 +58,8 @@ image: ## Build container image for local development and e2e
 e2e: image ## Batch cluster E2E BDD (make e2e openai-agents). Needs oc/KUBECONFIG; optional: E2E_ARGS, E2E_SKIP_FIXTURES=1.
 	IMAGE="$(IMAGE)" SANDBOX_IMAGE="$(SANDBOX_IMAGE)" E2E_ARGS="$(E2E_ARGS)" bash scripts/e2e-containers.sh $(filter-out e2e,$(MAKECMDGOALS))
 
-requirements: pyproject.toml ## Generate requirements.txt files for Konflux hermetic builds
-	$(UV) pip compile pyproject.toml --extra all --extra e2e \
-		-o requirements.x86_64.txt --generate-hashes \
-		--python-platform x86_64-unknown-linux-gnu --upgrade
-	$(UV) pip compile pyproject.toml --extra all --extra e2e \
-		-o requirements.aarch64.txt --generate-hashes \
-		--python-platform aarch64-unknown-linux-gnu --upgrade
-	python3 scripts/gen-build-deps.py \
-		requirements-build.txt \
-		requirements.x86_64.txt requirements.aarch64.txt
+requirements: ## Resolve RHOAI+PyPI deps for Konflux hermetic builds (alias for konflux-requirements)
+	$(MAKE) konflux-requirements
 
 konflux-requirements: ## Resolve RHOAI+PyPI deps for Konflux hermetic builds
 	python3 scripts/konflux_resolve.py --profile cpu

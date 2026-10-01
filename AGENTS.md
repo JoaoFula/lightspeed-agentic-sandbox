@@ -187,9 +187,11 @@ starts, with no network access during the build itself.
 
 | File | Purpose | How to regenerate |
 | --- | --- | --- |
-| `requirements.x86_64.txt` | Python deps with hashes (x86_64) | `make requirements` |
-| `requirements.aarch64.txt` | Python deps with hashes (aarch64) | `make requirements` |
-| `requirements-build.txt` | Build-time deps for source distributions | `make requirements` |
+| `.konflux/requirements.hashes.wheel.txt` | RHOAI wheel deps with hashes | `make requirements` |
+| `.konflux/requirements.hashes.source.txt` | PyPI sdist deps with hashes | `make requirements` |
+| `.konflux/requirements.hashes.wheel.pypi.txt` | PyPI wheel deps with hashes | `make requirements` |
+| `.konflux/requirements-build.txt` | Build-time deps for source distributions | `make requirements` |
+| `.konflux/requirements.overrides.txt` | Manual version pins for RHOAI compatibility | Edit manually, then `make requirements` |
 | `rpms.in.yaml` | System RPM package list | Edit manually |
 | `rpms.lock.yaml` | Resolved RPM lockfile | `make rpm-lockfile` |
 | `ubi.repo` | UBI 9 repo definitions for RPM resolution | Rarely changes |
@@ -198,7 +200,7 @@ starts, with no network access during the build itself.
 ### Bumping dependencies
 
 ```bash
-make bump-deps          # upgrade uv.lock + regenerate requirements.{arch}.txt
+make bump-deps          # upgrade uv.lock + regenerate .konflux/requirements.hashes.*.txt
 make rpm-lockfile       # regenerate rpms.lock.yaml (needs podman)
 ```
 
