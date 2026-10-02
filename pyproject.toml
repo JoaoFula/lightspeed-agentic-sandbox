@@ -48,6 +48,13 @@ e2e = [
     "kubernetes>=32.0.0",
 ]
 
+[tool.uv]
+constraint-dependencies = [
+    "PyJWT>=2.14.0",
+    "Authlib>=1.8.0",
+    "anyio>=4.14.2",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lightspeed_agentic"]
 
