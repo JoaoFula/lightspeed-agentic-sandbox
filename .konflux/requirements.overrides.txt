@@ -27,3 +27,11 @@ langchain-google-genai==4.4.0
 langchain-protocol==0.0.18
 langgraph==1.2.12
 langsmith==0.14.0
+
+# CVE fixes: override RHOAI pins that are below the minimum safe versions.
+# RHOAI ships older authlib/pyjwt/anyio; pin to the CVE-patched PyPI releases.
+# anyio 4.15.1 requires typing-extensions>=4.16.0 for PEP 661 sentinel support.
+authlib==1.8.0
+pyjwt==2.15.1
+anyio==4.15.1
+typing-extensions==4.16.0
