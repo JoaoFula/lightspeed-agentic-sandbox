@@ -65,8 +65,11 @@ def configmap_items_for_skill(skill_dir: Path) -> list[dict[str, str]]:
 def skill_materialize_script() -> str:
     """Shell for the init container: dereference ConfigMap symlinks into ``/app/skills``.
 
-    Kubernetes ConfigMap volume mounts expose files as symlinks under ``..data/``.
-    OpenAI ``LocalDirLazySkillSource`` skips non-regular ``SKILL.md`` files.
+    Kubernetes ConfigMap volume mounts expose files as symlinks under ``..data/``
+    and also contain a ``..data`` symlink plus a timestamped directory. Copying
+    those entries makes DeepAgents list paths its backend then rejects.
+    Copy only skill entries and dereference them so ``SKILL.md`` is a regular
+    file (OpenAI ``LocalDirLazySkillSource`` skips non-regular files).
     """
     return (
         "set -euo pipefail\n"
@@ -75,7 +78,8 @@ def skill_materialize_script() -> str:
         '  name=$(basename "${src}")\n'
         f'  dest="{E2E_POD_SKILLS_DIR}/${{name}}"\n'
         '  mkdir -p "${dest}"\n'
-        '  cp -aL "${src}/." "${dest}/"\n'
+        "  find \"${src}\" -mindepth 1 -maxdepth 1 ! -name '..*' "
+        '-exec cp -aL {} "${dest}/" \\;\n'
         "done\n"
     )
 

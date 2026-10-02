@@ -16,12 +16,6 @@ def _run_query(bdd_context: dict[str, Any], run_runner: Any, **kwargs: Any) -> N
     store_run_result(bdd_context, res)
 
 
-@when("I run the agent with a simple reasoning query")
-def post_simple_reasoning(bdd_context: dict[str, Any], run_runner: Any) -> None:
-    bdd_context["query"] = "What is 17 * 23? Reply with just the number."
-    _run_query(bdd_context, run_runner)
-
-
 @when("I run the agent with the prepared echo-token query")
 def post_echo_token_query(bdd_context: dict[str, Any], run_runner: Any, provider_name: str) -> None:
     _ = provider_name

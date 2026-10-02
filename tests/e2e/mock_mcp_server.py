@@ -1,8 +1,9 @@
 """Lightweight mock MCP server for E2E testing.
 
-Exposes two tools via Streamable HTTP transport:
+Exposes three tools via Streamable HTTP transport:
 - echo(message): returns the message as-is
 - list_namespaces(): returns a static list of cluster namespaces
+- fail_probe(): always fails with an unguessable sentinel
 
 Run standalone:
     python tests/e2e/mock_mcp_server.py [--port 19090]
@@ -36,6 +37,10 @@ MOCK_NAMESPACES = [
     "e2e-sentinel-ns-7f3a9",
 ]
 
+# Returned only by fail_probe. A model cannot invent it, so its presence in a
+# summary proves the agent invoked that MCP tool.
+MCP_FAIL_SENTINEL = "e2e-mcp-fail-7c2e91"
+
 mcp_server = Server("mock-ocp-mcp")
 
 
@@ -58,6 +63,11 @@ async def list_tools():
             description="Lists cluster namespaces.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        Tool(
+            name="fail_probe",
+            description="Always fails. Call it to observe an MCP tool error.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -71,6 +81,8 @@ async def call_tool(name: str, arguments: dict):
     if name == "list_namespaces":
         ns_list = ", ".join(MOCK_NAMESPACES)
         return [TextContent(type="text", text=f"Namespaces: {ns_list}")]
+    if name == "fail_probe":
+        raise ValueError(MCP_FAIL_SENTINEL)
     raise ValueError(f"Unknown tool: {name}")
 
 

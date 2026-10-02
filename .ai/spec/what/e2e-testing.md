@@ -60,8 +60,10 @@ belongs in unit tests.
 - **One feature file** for OLS-3220 context/OTEL scenarios: `sandbox_e2e.feature`.
   Legacy HTTP probe and timeout scenarios removed (not applicable to batch).
 - **Skills mounts** — one ConfigMap volume per skill (source at ``/mnt/e2e-skills-src/{basename}``);
-  an init container copies files with ``cp -aL`` into an emptyDir at ``/app/skills/{basename}``
-  so ``SKILL.md`` is a regular file (ConfigMap symlinks break OpenAI lazy skill discovery);
+  an init container dereferences each skill entry with ``cp -aL`` into an emptyDir at
+  ``/app/skills/{basename}`` and skips kubelet ``..data`` and timestamp directories,
+  so ``SKILL.md`` is a regular file (ConfigMap symlinks break OpenAI lazy skill discovery)
+  and DeepAgents does not list those internal directories;
   writable ``.agents`` under the same emptyDir; ``E2E_OUTPUT_DIR`` for echo-token only.
 - **Multi-provider matrix** — `anthropic-vertex-deepagents`, `anthropic-bedrock-deepagents`,
   `gemini-vertex-adk`, `openai-agents`; OpenAI validated most frequently on cluster.

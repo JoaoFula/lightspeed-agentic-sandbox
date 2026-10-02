@@ -172,9 +172,8 @@ def prepare_echo_token(bdd_context: dict[str, Any]) -> None:
         "1. Load the echo-token skill.\n"
         "2. From the skill directory, run: bash scripts/echo-token.sh\n"
         "3. Parse the JSON printed to stdout.\n"
-        "4. Reply with a single JSON object only (no markdown): success=true, "
-        "summary containing the token verbatim, token equal to the script token field, "
-        "and status equal to the script status field.\n"
+        "4. Reply with a single JSON object only (no markdown), for example "
+        '{"summary": "<script token>", "token": "<script token>", "status": "<script status>"}.\n'
         "Do not reply until step 2 exits 0 and prints JSON."
     )
     bdd_context["output_schema"] = ECHO_TOKEN_SCHEMA
@@ -285,16 +284,12 @@ def prepare_mcp_tool_invocation(bdd_context: dict[str, Any]) -> None:
     )
 
 
-@given("an MCP query targeting a nonexistent tool has been prepared")
-def prepare_mcp_nonexistent_tool(bdd_context: dict[str, Any]) -> None:
+@given("an MCP query targeting a failing tool has been prepared")
+def prepare_mcp_failing_tool(bdd_context: dict[str, Any]) -> None:
     bdd_context["output_schema"] = MCP_TOOL_OUTPUT_SCHEMA
     bdd_context["query"] = (
-        "You MUST invoke tools only through the MCP server named 'mock-ocp-mcp'. "
-        "Do NOT use shell, bash, exec_command, or any local commands. "
-        "Call the tool named 'nonexistent_tool_xyz_999' on mock-ocp-mcp. "
-        "Do not assume the outcome — make the MCP tool call. "
-        "Return a single JSON object only (no markdown). Report the real outcome: "
-        "set success to true only if the MCP tool call actually succeeded, false otherwise, "
-        "and put a short description of what happened (include mock-ocp-mcp and the tool name) "
-        "in summary."
+        "Call the 'fail_probe' tool on the 'mock-ocp-mcp' MCP server. "
+        "Return a single JSON object only (no markdown). "
+        "Set success to false and put the tool's exact output in the summary field. "
+        "Do not infer or fabricate the tool output."
     )
