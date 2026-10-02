@@ -772,9 +772,31 @@ class TestEventMapping:
     ) -> None:
         monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+        monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
         from lightspeed_agentic.providers.deepagents import _structured_output_method
 
         assert _structured_output_method() == "function_calling"
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://vllm.example.com/v1", "json_schema"),
+            ("https://api.anthropic.com", "function_calling"),
+            ("https://api.anthropic.com/v1", "function_calling"),
+        ],
+    )
+    def test_structured_output_method_by_endpoint(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        url: str,
+        expected: str,
+    ) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_USE_VERTEX", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", url)
+        from lightspeed_agentic.providers.deepagents import _structured_output_method
+
+        assert _structured_output_method() == expected
 
     def test_structured_output_method_function_calling_on_bedrock(
         self, monkeypatch: pytest.MonkeyPatch

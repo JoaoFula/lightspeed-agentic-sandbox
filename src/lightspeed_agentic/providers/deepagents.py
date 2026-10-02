@@ -13,6 +13,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Literal, cast
+from urllib.parse import urlparse
 
 from lightspeed_agentic.skills import has_skills
 from lightspeed_agentic.types import (
@@ -43,6 +44,8 @@ _JSON_SCHEMA_TYPE_MAP: dict[str, type[Any]] = {
     "number": float,
     "boolean": bool,
 }
+
+_NATIVE_ANTHROPIC_HOSTS = {"api.anthropic.com"}
 
 
 def _anthropic_backend() -> Literal["vertex", "bedrock", "direct"]:
@@ -205,9 +208,22 @@ def _usage_from_message(msg: Any) -> tuple[int, int]:
     return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
 
 
+def _is_custom_anthropic_endpoint() -> bool:
+    """Return whether Anthropic base URL points to a custom endpoint."""
+    raw_url = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+    if not raw_url:
+        return False
+
+    hostname = urlparse(raw_url).hostname
+    return not hostname or hostname.lower().rstrip(".") not in _NATIVE_ANTHROPIC_HOSTS
+
+
 def _structured_output_method() -> str:
-    """Anthropic rejects large json_schema grammars; function_calling avoids compilation."""
-    if _anthropic_backend() in {"direct", "bedrock"}:
+    """Select structured-output binding compatible with active Anthropic endpoint."""
+    backend = _anthropic_backend()
+    if backend == "bedrock":
+        return "function_calling"
+    if backend == "direct" and not _is_custom_anthropic_endpoint():
         return "function_calling"
     return "json_schema"
 
