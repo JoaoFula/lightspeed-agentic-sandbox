@@ -8,6 +8,7 @@ These specs define the behavioral rules and codebase navigation for the lightspe
 |---|---|---|
 | **what/** | `.ai/spec/what/` | Behavioral rules. What the system must do. Implementation-agnostic. |
 | **how/** | `.ai/spec/how/` | Codebase navigation. How the code is organized. Implementation-specific. |
+| **decisions/** | `.ai/spec/decisions/` | Architectural choices, alternatives, and consequences. |
 
 ### what/ — Behavioral Specifications
 
@@ -29,6 +30,12 @@ These specs define the behavioral rules and codebase navigation for the lightspe
 | [project-structure.md](how/project-structure.md) | Entry points, naming conventions, dependency extras (package tree in AGENTS.md) |
 | [provider-architecture.md](how/provider-architecture.md) | Data flow, abstractions, SDK integration points, implementation notes |
 
+### decisions/ — Architectural Decision Records
+
+| Decision | Description |
+|---|---|
+| [0001-tool-output-boundary.md](decisions/0001-tool-output-boundary.md) | [PLANNED: OLS-3929] DeepAgents-only SAFE-02 boundaries, trust instruction, and model/event separation |
+
 ## Scope
 
 These specs cover the **lightspeed-agentic-sandbox** Python agent runtime only. The operator (which calls this runtime), console plugin, and skills packaging are separate projects with their own specs.
@@ -44,6 +51,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand the system | `what/system-overview.md` |
 | Understand the batch entrypoint | `what/run-api.md` |
 | Add or modify a provider | `what/provider-contract.md` + `how/provider-architecture.md` |
+| Understand DeepAgents tool-output boundaries | `what/provider-contract.md` (SAFE-02) + `decisions/0001-tool-output-boundary.md` |
 | Understand env vars and deployment | `what/configuration.md` |
 | Navigate the codebase | `how/project-structure.md` |
 | Understand readiness checks | `what/health-probes.md` |

@@ -167,6 +167,8 @@ OPENAI_API_KEY: <token-or-placeholder>
 
 22e. The value MUST NOT change Gemini ADK or OpenAI Agents behavior.
 
+22f. [PLANNED: OLS-3929] DeepAgents tool-output wrapping and its system-prompt trust instruction MUST remain active regardless of this value. SAFE-02 requires no new environment variable, operator setting, or configurable delimiter format. See `provider-contract.md`, Tool-Output Content Boundary.
+
 ### Provider-egress TLS and CA
 
  1. **Stable CA mount root.** The sandbox MUST treat `/var/run/secrets/lightspeed/tls/` as the common read-only root for operator-provided CA sources. It MUST scan regular `.crt` and `.pem` files below this root, including files from the additional CA ConfigMap and integration CA Secrets. When the additional CA reference is absent, no `additional-ca/` source is expected and the system trust store remains the base trust source.
