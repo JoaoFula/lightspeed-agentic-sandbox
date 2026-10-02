@@ -257,7 +257,7 @@ class TestLoadBatchE2EConfig:
         config = load_batch_e2e_config()
         assert config.lightspeed_provider == "openai"
         assert config.llm_secret == expected_secret
-        assert config.model == "gpt-5-mini"
+        assert config.model == "gpt-6-luna"
         assert config.verify_full_fixtures is False
         assert config.job_env == {
             "LIGHTSPEED_TLS_PROFILE": "IntermediateType",
