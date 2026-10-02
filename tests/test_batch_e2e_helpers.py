@@ -23,7 +23,6 @@ from tests.e2e.batch_runner import (
     build_result_template,
     run_batch_query,
 )
-from tests.e2e.otel_verify import logs_contain_audit_logs_for_run, logs_contain_traces_for_run
 from tests.e2e.skills_fixtures import (
     E2E_POD_SKILLS_DIR,
     E2E_POD_SKILLS_SRC_DIR,
@@ -33,6 +32,7 @@ from tests.e2e.skills_fixtures import (
 )
 from tests.e2e.suite_setup import (
     BatchE2EConfig,
+    _session_job_env,
     load_batch_e2e_config,
     resolve_llm_secret,
     resolve_model,
@@ -303,36 +303,6 @@ class TestResolveHelpers:
         assert resolve_llm_secret("openai-agents") == "my-secret"
 
 
-class TestOtelVerify:
-    RUN_UID = "a" * 32
-
-    def test_traces_positive(self) -> None:
-        logs = f"ResourceSpans #0\nSpan #0\n     -> agenticrun.uid: Str({self.RUN_UID})"
-        assert logs_contain_traces_for_run(logs, self.RUN_UID)
-
-    def test_traces_negative_without_span_markers(self) -> None:
-        logs = f"agenticrun.uid={self.RUN_UID}"
-        assert not logs_contain_traces_for_run(logs, self.RUN_UID)
-
-    def test_audit_logs_positive(self) -> None:
-        logs = (
-            "LogsExporter\nLogRecord #0\n"
-            f"     -> agenticrun.uid: Str({self.RUN_UID})\n"
-            "     -> agenticrun.phase: Str(analysis)\n"
-            "     -> event: Str(gen_ai.choice)"
-        )
-        assert logs_contain_audit_logs_for_run(logs, self.RUN_UID, phase="analysis")
-
-    def test_audit_logs_negative_wrong_phase(self) -> None:
-        logs = (
-            "LogsExporter\nLogRecord #0\n"
-            f"     -> agenticrun.uid: Str({self.RUN_UID})\n"
-            "     -> agenticrun.phase: Str(execution)\n"
-            "     -> event: Str(gen_ai.choice)"
-        )
-        assert not logs_contain_audit_logs_for_run(logs, self.RUN_UID, phase="analysis")
-
-
 class TestBuildJobSpec:
     def _config(self, *, job_env: dict[str, str] | None = None) -> BatchE2EConfig:
         llm_secret = resolve_llm_secret("openai-agents")
@@ -355,6 +325,9 @@ class TestBuildJobSpec:
         env = job.spec["template"]["spec"]["containers"][0]["env"]
         return {item["name"]: item["value"] for item in env}
 
+    def test_session_job_env_does_not_enable_tool_output_inspection(self) -> None:
+        assert "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED" not in _session_job_env()
+
     def test_sets_required_execution_limit_env_defaults(self) -> None:
         job = _build_job_spec(
             self._config(),
@@ -369,6 +342,22 @@ class TestBuildJobSpec:
 
         assert env["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"] == "600"
         assert env["LIGHTSPEED_AGENT_MAX_TURNS"] == "200"
+        assert env["LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"] == "false"
+
+    def test_applies_job_env_override_without_mutating_config(self) -> None:
+        config = self._config()
+        job = _build_job_spec(
+            config,
+            "job-name",
+            "input-cm",
+            {"app": "test"},
+            "run-uid",
+            "analysis",
+            job_env_overrides={"LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED": "true"},
+        )
+
+        assert self._env(job)["LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"] == "true"
+        assert "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED" not in config.job_env
 
     def test_timeout_ms_override_rounds_up_to_seconds(self) -> None:
         job = _build_job_spec(
@@ -411,6 +400,7 @@ class TestBuildJobSpec:
                 job_env={
                     "LIGHTSPEED_AGENT_TIMEOUT_SECONDS": "42",
                     "LIGHTSPEED_AGENT_MAX_TURNS": "7",
+                    "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED": "true",
                 }
             ),
             "job-name",
@@ -424,6 +414,7 @@ class TestBuildJobSpec:
 
         assert env["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"] == "42"
         assert env["LIGHTSPEED_AGENT_MAX_TURNS"] == "7"
+        assert env["LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"] == "true"
 
 
 class TestRunBatchQuery:

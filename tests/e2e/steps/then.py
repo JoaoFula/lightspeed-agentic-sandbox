@@ -12,7 +12,11 @@ from pytest_bdd import then
 from tests.e2e.analysis_schemas import ANALYSIS_WITH_COMPONENTS_SCHEMA
 from tests.e2e.analysis_tokens import assert_skill_tokens_in_response
 from tests.e2e.mock_mcp_server import MCP_FAIL_SENTINEL
-from tests.e2e.otel_verify import wait_for_otel_audit_logs, wait_for_otel_traces
+from tests.e2e.otel_verify import (
+    wait_for_otel_audit_logs,
+    wait_for_otel_tool_result_inspection,
+    wait_for_otel_traces,
+)
 from tests.e2e.run_result import E2ERunResult
 from tests.e2e.skills_fixtures import E2E_TOKEN_REL_PATH
 from tests.e2e.suite_setup import BatchE2EConfig
@@ -76,6 +80,47 @@ def assert_otel_traces_received(
     """Assert the e2e OTEL collector debug output includes spans for this batch run."""
     run_uid = _require_run_uid(bdd_context)
     wait_for_otel_traces(k8s_core_client, batch_e2e_config.namespace, run_uid)
+
+
+@then("the run fails closed with a tool-result safety inspection error")
+def assert_run_fails_closed_with_inspection_error(bdd_context: dict[str, Any]) -> None:
+    """Assert the batch Job rejects a malicious tool result before model use."""
+    res = _require_run_result(bdd_context)
+    assert res.batch is not None, "batch run result missing Job metadata"
+    assert not res.batch.job_succeeded, "malicious tool result unexpectedly succeeded"
+    evidence = "\n".join(part for part in (res.batch.termination_message, res.raw_text) if part)
+    assert "ToolResultSafetyInspectionFailed" in evidence, evidence[:1000]
+
+
+@then("the OTEL collector received a tool-result inspection span")
+def assert_otel_tool_result_inspection_received(
+    bdd_context: dict[str, Any],
+    batch_e2e_config: BatchE2EConfig,
+    k8s_core_client: CoreV1Api,
+) -> None:
+    """Assert inspection emitted a span correlated to this batch run."""
+    run_uid = _require_run_uid(bdd_context)
+    wait_for_otel_tool_result_inspection(
+        k8s_core_client,
+        batch_e2e_config.namespace,
+        run_uid,
+    )
+
+
+@then("the OTEL collector received a malicious tool-result inspection span")
+def assert_otel_malicious_tool_result_inspection_received(
+    bdd_context: dict[str, Any],
+    batch_e2e_config: BatchE2EConfig,
+    k8s_core_client: CoreV1Api,
+) -> None:
+    """Assert a malicious inspection span is correlated to this batch run."""
+    run_uid = _require_run_uid(bdd_context)
+    wait_for_otel_tool_result_inspection(
+        k8s_core_client,
+        batch_e2e_config.namespace,
+        run_uid,
+        expected_outcome="malicious",
+    )
 
 
 @then("the OTEL collector received audit logs with agenticrun attributes")
